@@ -104,6 +104,7 @@ Config Sync runtime remains unqualified.
 Ordinary rollback reverts the app digest/config; it does not reverse additive DB
 migrations. Do not let RootSync and Flux or Cloud Deploy own the same identities.
 Before cloud activation, verify budget-alert delivery to the approved private
-recipient, the billing-currency equivalent of the £5 ceiling, maximum lifetime and
+recipient, a billing-currency threshold informed by the £5 planning reference,
+current account usage and credit runway, maximum lifetime and
 bootstrap/state teardown policy, and implement independent cleanup. Alerts are not
 a hard monetary cap.

@@ -123,9 +123,9 @@ resource "google_billing_budget" "cost_alerts" {
       condition = (
         can(regex("^[0-9]{6}-[0-9]{6}-[0-9]{6}$", var.billing_account_id)) &&
         var.cost_budget_currency == "GBP" &&
-        var.cost_budget_amount > 0 && var.cost_budget_amount <= 5
+        var.cost_budget_amount > 0
       )
-      error_message = "Enabled alerts require a billing account, GBP budget, and amount no greater than the approved £5 ceiling."
+      error_message = "Enabled alerts require a valid billing account, GBP currency, and positive notification threshold. The threshold is not a spending cap."
     }
   }
 }

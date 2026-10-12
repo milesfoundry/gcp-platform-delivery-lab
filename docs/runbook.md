@@ -4,10 +4,11 @@
 
 Follow the [ephemeral HA architecture and cost policy](architecture-cost.md)
 before activation. London multi-zone HA, 4 GiB minimum-first nodes, layered
-provider-specific alerts, a £5 gross per-run planning ceiling, £10 total for the
-first GCP+AWS attempts, 60-minute maximum lifetime and immediate audited cleanup
-are the approved starting policy. These are not provider-guaranteed monetary caps;
-preflight cost coverage and alert delivery must pass before apply. Existing
+provider-specific alerts, £5 gross per run / £10 for the initial pair as planning
+reference amounts, 60-minute maximum lifetime and immediate audited cleanup are
+the approved starting policy. Cost tracking protects the free-credit runway;
+these amounts are not provider-guaranteed caps. Verify current credit balance and
+expiry, cost estimate, alert delivery and cleanup before apply. Existing
 topology/intent validators do not yet enforce the complete policy.
 
 ## Credential-free checks
@@ -39,7 +40,9 @@ This is not yet an executable end-to-end cloud runbook. Do not run apply merely
 because validate passes. Required outstanding gates:
 
 1. Confirm the dedicated project, billing scope, region/zone, operator egress CIDR,
-   GBP billing currency, £5 per-run budget and 60-minute expiry.
+   GBP billing currency, available promotional-credit balance/expiry, £5 per-run
+   planning reference and 60-minute expiry. Record gross usage, net cash and
+   projected credit runway.
    Configure and test the GCP cost-alert email plus the 25/50/75/90/100% actual
    and 75/100% forecast thresholds before provisioning.
 2. Activate and qualify the [separate identity/alert bootstrap](cloud-bootstrap.md).
@@ -65,7 +68,9 @@ grant broad Monitoring administration to the run workflow.
 
 No workflow in this repo has cloud credentials or performs Terraform apply.
 Budget intent is not a spending cap. A future cloud plan must list all billable
-resources including NAT, disks, logging and any retained artifacts.
+resources including NAT, disks, logging and any retained artifacts. Destroy the
+run as soon as evidence capture is complete or the lab becomes idle; do not leave
+billable infrastructure running between sessions.
 
 ## Local failure diagnosis
 

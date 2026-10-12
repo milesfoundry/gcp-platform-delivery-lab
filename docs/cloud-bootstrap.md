@@ -54,7 +54,9 @@ Once cloud settings are approved and access is verified:
 
 1. Review the bootstrap plan under the operator identity.
 2. Configure the approved private cost-alert recipient, enable the project budget,
-   and set its GBP amount to at most £5 with five actual and two forecast thresholds.
+   and choose a GBP notification threshold using the £5 per-run planning reference,
+   current account baseline and remaining credit runway. The threshold is not a
+   spending cap. Keep the five actual and two forecast thresholds.
    Budget/email inputs and Terraform state must stay private.
 3. Create the reviewed federation/budget/alert resources; record identifiers
    privately.

@@ -35,7 +35,7 @@ variable "cost_budget_currency" {
 }
 
 variable "cost_budget_amount" {
-  description = "Gross monthly warning threshold in GBP; must be positive and no greater than £5."
+  description = "Monthly cost-notification threshold in GBP; positive and selected for account usage/runway. This is not a spending cap."
   type        = number
   default     = 0
 }

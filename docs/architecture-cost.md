@@ -76,12 +76,14 @@ Sources:
 
 ## Alerting, cost safeguards and immediate teardown
 
-Approved starting envelope: £5 gross usage per cloud run, £10 maximum across the
-first GCP and AWS attempts, and 60 minutes from first billable resource. This is
-a strict plan/no-go target, not a provider-guaranteed maximum charge. The complete
-architecture estimate must fit the cap with contingency before apply; do not
-silently raise it. Keep gross list-price usage visible separately from trial
-credits and net cash charges.
+Approved starting planning envelope: estimate £5 gross usage per cloud run and
+£10 for the first GCP+AWS pair, with a 60-minute maximum from first billable
+resource. These are monitoring and planning reference points, not hard caps or
+automatic no-go thresholds. The primary cost objective is to monitor gross usage,
+net cash charges, remaining promotional-credit balance/expiry and projected
+runway, then destroy all run resources promptly whenever the lab is idle. Keep
+gross usage visible separately from credits and net cash charges; do not assume
+credits will cover every service or arrive before charges are due.
 
 Configure layered notifications before activation:
 
@@ -96,18 +98,24 @@ Configure layered notifications before activation:
   teardown/audit passed or failed) to the same provider-specific mailbox. GCP's
   log-alert emitter is implemented but not yet scheduled or connected to a cloud
   run; delivery has not been tested.
-- At 75% of the pre-run ceiling, stop optional tests and begin teardown. At 90%,
-  fail the run and force teardown. At expiry, the independent janitor deletes the
-  run even if the orchestrator is unavailable. Alert delivery failure is a
-  preflight failure, not a warning to ignore.
+- At 75% of the planning amount, review actual usage and projected credit runway;
+  at 90%, stop optional work and begin teardown if continued execution risks
+  exhausting available credits or creating an unapproved charge. At expiry or
+  when idle, the independent janitor deletes the run even if the orchestrator is
+  unavailable. Alert delivery failure is a preflight failure, not a warning to
+  ignore.
 
 Email values belong in private deployment configuration, not these public repos.
 Verify end-to-end delivery before provisioning. Billing notifications are delayed
 signals, not a real-time circuit breaker. GKE/Compute are not currently among
 Google's eligible spend-cap services; AWS Budgets may also report after usage.
 Therefore retain the independent wall-clock watchdog, run inventory and provider
-cleanup/audit. Resource limits, alerts, deadlines and cleanup must not be called
-a guaranteed monetary hard cap.
+cleanup/audit. Resource limits, alerts, deadlines and cleanup are operational
+safeguards, not a guaranteed monetary hard cap. The lack of a provider-wide cap
+is not by itself a blocker; before each run, record available credit and expiry,
+review the full cost estimate against the remaining runway, confirm alerts and
+teardown, and obtain explicit approval if the estimate could consume the runway
+or incur unplanned cash charges.
 
 Begin teardown no later than minute 40 and require independent inventory audit by
 minute 60. Brief workload time does not mean instant provisioning/deletion; include

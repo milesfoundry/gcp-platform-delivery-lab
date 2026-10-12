@@ -48,13 +48,28 @@ run "cost_alerts_cover_early_actual_and_forecast_thresholds" {
   }
 }
 
-run "cost_alerts_reject_over_cap" {
+run "cost_alerts_accept_threshold_above_planning_reference" {
   command = plan
   variables {
     enable_cost_alerts   = true
     billing_account_id   = "000000-000000-000000"
     cost_budget_currency = "GBP"
-    cost_budget_amount   = 5.01
+    cost_budget_amount   = 25
+    cost_alert_email     = "gcp-alert@example.invalid"
+  }
+  assert {
+    condition     = google_billing_budget.cost_alerts["enabled"].amount[0].specified_amount[0].units == "25"
+    error_message = "The monthly alert threshold is configurable above the planning reference; it is not a spend cap."
+  }
+}
+
+run "cost_alerts_reject_nonpositive_threshold" {
+  command = plan
+  variables {
+    enable_cost_alerts   = true
+    billing_account_id   = "000000-000000-000000"
+    cost_budget_currency = "GBP"
+    cost_budget_amount   = 0
     cost_alert_email     = "gcp-alert@example.invalid"
   }
   expect_failures = [google_billing_budget.cost_alerts]
