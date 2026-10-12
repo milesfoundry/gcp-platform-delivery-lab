@@ -1,9 +1,9 @@
 # GCP Platform Delivery Lab
 
-[![Validate](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/workflows/validate.yaml/badge.svg)](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/workflows/validate.yaml)
+[![Validate](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/workflows/validate.yaml/badge.svg)](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/workflows/validate.yaml)
 
 A portfolio lab comparing Terraform-managed infrastructure and Config Sync
-delivery with the [AWS reconciliation lab](https://github.com/talisman36935/aws-kubernetes-reconciliation-lab).
+delivery with the [AWS reconciliation lab](https://github.com/talisman36935org/aws-kubernetes-reconciliation-lab).
 Both use **Report Workshop**, a small deterministic asynchronous Go application.
 
 **Status: first implementation slice, not a completed cloud demonstration.**
@@ -18,7 +18,7 @@ Requirements: Docker with Compose v2+, Python 3.10+, free localhost ports
 The first build downloads public images and Go dependencies.
 
 ```sh
-git clone https://github.com/talisman36935/gcp-platform-delivery-lab.git
+git clone https://github.com/talisman36935org/gcp-platform-delivery-lab.git
 cd gcp-platform-delivery-lab/workload
 docker compose up --build -d
 python3 smoke.py

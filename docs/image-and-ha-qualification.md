@@ -3,9 +3,9 @@
 ## Explicit deployment identity release — 2026-10-07
 
 Source `2202e13962914f71e56b146ff7632282b9d04492` passed Validate
-[37687488181](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37687488181)
+[37687488181](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/runs/37687488181)
 and Publish and qualify HA
-[37687979581](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37687979581).
+[37687979581](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/runs/37687979581).
 The immutable AMD64/ARM64 index is
 `ghcr.io/talisman36935/report-workshop@sha256:3c08b2754404fdc14dda81ee4e0bc9f9f640a3223ccd89988f19e74250c41816`.
 Native ARM migration/API/worker golden smoke passed. Hosted kind recorded primary
@@ -26,9 +26,9 @@ qualification or signature verification.
 ## Poll-based readiness release — 2026-10-06
 
 Source `3b1abf3b791b4ab95f852c860786ca91d8c0a381` passed hosted Validate
-[37517856995](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37517856995)
+[37517856995](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/runs/37517856995)
 and exact-source publish/qualification
-[37518413015](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37518413015).
+[37518413015](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/runs/37518413015).
 The immutable index is
 `ghcr.io/talisman36935/report-workshop@sha256:dfba95425f82b619987f307e63e2e2720f9395a5a2c7836ec2d2a25f7d398d23`.
 Native ARM migration, API, worker readiness and golden-report smoke passed.
@@ -49,9 +49,9 @@ passes. This remains a one-host kind simulation, not cloud-zone/CSI/IAM evidence
 ## Workload-identity-separated release — 2026-10-06
 
 Source `32c98ffd9cacb528c2d017f7ea39b54536ca2211` passed GCP Validate
-[37493189725](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37493189725)
+[37493189725](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/runs/37493189725)
 and Publish and qualify HA
-[37493759179](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37493759179)
+[37493759179](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/runs/37493759179)
 for `ghcr.io/talisman36935/report-workshop@sha256:47c7464df5cb1d20ba05eeb391d211309919c477503316d7c8fcf6d4feb43fe5`.
 Native ARM application smoke, Kubernetes HA and anonymous AMD64/ARM64 image
 content verification passed. The
@@ -68,14 +68,14 @@ This is Kubernetes/PostgreSQL process behavior on one hosted runner with three
 labelled simulated workers. No cloud was provisioned and no physical zone failure,
 cloud CSI, IAM or cloud telemetry was tested. The source/image pair is consumed by
 the companion AWS fixture; hosted application GitOps against it passed
-[37496120127](https://github.com/talisman36935/aws-kubernetes-reconciliation-lab/actions/runs/37496120127),
+[37496120127](https://github.com/talisman36935org/aws-kubernetes-reconciliation-lab/actions/runs/37496120127),
 but this remains local kind/Flux evidence, not AWS/EKS qualification.
 
 ## Current adapter-capable release — 2026-10-06
 
 Source `0e0a6133a18e4cfb10aae4defabd5b8f52ec69b5` passed full Validate
-[37398071004](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37398071004).
-[Release 37398470462](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37398470462)
+[37398071004](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/runs/37398071004).
+[Release 37398470462](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/runs/37398470462)
 passed publication, native ARM migration/API/worker golden smoke and hosted
 Kubernetes HA for
 `ghcr.io/talisman36935/report-workshop@sha256:505f63c5428ef76ccbd39389b623962f8abc3bc72e73bc73b1b5cfcf70bcc23a`.
@@ -116,7 +116,7 @@ The release for source `6a6e522b0f67925e2e5fab476c61350582aadf1e` is publicly
 pullable at
 `ghcr.io/talisman36935/report-workshop@sha256:ff32688b7c8f2764ea46a32e8813d8e45585615d494c116324dfc5f2b7307d9f`.
 Native ARM migration/API/worker golden smoke passed in
-[37392244169](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37392244169).
+[37392244169](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/runs/37392244169).
 The separate [anonymous-pull observation](observations/6a6e522/anonymous-pull.json)
 verifies both manifests, configs and every runtime layer by digest without an
 account credential. The original release artifact records what was known at
@@ -136,7 +136,7 @@ not signature authenticity or Kubernetes/cloud runtime behavior.
 
 ## Hosted Kubernetes experiment
 
-[Run 37392244169](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37392244169)
+[Run 37392244169](https://github.com/talisman36935org/gcp-platform-delivery-lab/actions/runs/37392244169)
 passed all three jobs. The [runtime observation](observations/6a6e522/kubernetes-ha.json)
 records primary `report-db-1` to `report-db-2` in 59.726 seconds (including full
 database readiness), then primary-worker loss and promotion back to `report-db-1`

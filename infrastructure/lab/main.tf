@@ -151,7 +151,7 @@ resource "google_gke_hub_feature_membership" "config_sync" {
       source_format = "unstructured"
       prevent_drift = false
       git {
-        sync_repo   = "https://github.com/talisman36935/gcp-platform-delivery-lab"
+        sync_repo   = "https://github.com/talisman36935org/gcp-platform-delivery-lab"
         sync_branch = "main"
         sync_rev    = var.source_revision
         policy_dir  = "gitops/platform"
