@@ -1,8 +1,8 @@
 # Source qualification: `2202e139`
 
 The exact source revision `2202e13962914f71e56b146ff7632282b9d04492` passed
-[GCP Validate run 37687488181](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37687488181)
-and [Publish and qualify HA run 37687979581](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37687979581).
+[GCP Validate run 37687488181](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37687488181)
+and [Publish and qualify HA run 37687979581](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37687979581).
 The immutable multi-architecture image is
 `ghcr.io/talisman36935/report-workshop@sha256:3c08b2754404fdc14dda81ee4e0bc9f9f640a3223ccd89988f19e74250c41816`.
 
