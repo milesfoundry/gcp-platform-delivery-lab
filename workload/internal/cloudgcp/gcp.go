@@ -13,8 +13,8 @@ import (
 	pubsub "cloud.google.com/go/pubsub/v2/apiv1"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"cloud.google.com/go/storage"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/application"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/domain"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/application"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/domain"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )

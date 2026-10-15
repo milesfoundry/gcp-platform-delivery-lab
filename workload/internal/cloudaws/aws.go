@@ -15,8 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/smithy-go"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/application"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/domain"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/application"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/domain"
 )
 
 type Adapter struct {

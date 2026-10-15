@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/application"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/cloudaws"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/cloudgcp"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/domain"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/httpapi"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/postgres"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/telemetry"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/application"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/cloudaws"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/cloudgcp"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/domain"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/httpapi"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/postgres"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/telemetry"
 )
 
 var revision = "development"
