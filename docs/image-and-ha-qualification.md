@@ -1,5 +1,13 @@
 # Image release and hosted HA qualification
 
+## GHCR ownership note — 2026-10-15
+
+Current workflow/source pins use the Milesfoundry package
+`ghcr.io/milesfoundry/report-workshop@sha256:8b0dcf99cb782a04592fdc065201be0c14fe237282bb95118f7960f064c8c3c8`.
+The older `ghcr.io/talisman36935/report-workshop` references below are
+immutable publication and qualification observations. They preserve the image
+identity tested at the time and should not be rewritten as current state.
+
 ## Explicit deployment identity release — 2026-10-07
 
 Source `2202e13962914f71e56b146ff7632282b9d04492` passed Validate
