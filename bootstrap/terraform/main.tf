@@ -1,7 +1,7 @@
 locals {
   repository_id = "1402116284"
-  owner_id      = "68283664"
-  workflow_ref  = "talisman36935/gcp-platform-delivery-lab/.github/workflows/cloud-run.yaml@refs/heads/main"
+  owner_id      = "341704084"
+  workflow_ref  = "milesfoundry/gcp-platform-delivery-lab/.github/workflows/cloud-run.yaml@refs/heads/main"
   lifecycle_events = toset([
     "created", "ready", "expiry-warning", "teardown-started",
     "teardown-passed", "teardown-failed",

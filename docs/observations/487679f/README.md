@@ -1,6 +1,6 @@
 # Hosted local investigation — 2026-10-04
 
-[Successful run 37164832226](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37164832226)
+[Successful run 37164832226](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37164832226)
 tested source `487679ffcd7125f1f1fd7878d5d84401bc7d6819` in local Compose on
 a hosted runner. These allowlisted JSON observations are preserved in Git.
 

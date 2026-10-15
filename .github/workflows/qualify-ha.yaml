@@ -48,7 +48,7 @@ jobs:
           context: workload
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/talisman36935/report-workshop:sha-${{ inputs.source_revision }}
+          tags: ghcr.io/milesfoundry/report-workshop:sha-${{ inputs.source_revision }}
           build-args: REVISION=${{ inputs.source_revision }}
           provenance: mode=max
           sbom: true
@@ -58,7 +58,7 @@ jobs:
           SOURCE_REVISION: ${{ inputs.source_revision }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          IMAGE="ghcr.io/talisman36935/report-workshop@$DIGEST"
+          IMAGE="ghcr.io/milesfoundry/report-workshop@$DIGEST"
           python3 workload/deploy/release_record.py --image "$IMAGE" --revision "$SOURCE_REVISION"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

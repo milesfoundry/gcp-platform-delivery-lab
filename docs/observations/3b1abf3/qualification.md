@@ -1,9 +1,9 @@
 # Worker poll readiness and hosted HA qualification — 2026-10-06
 
 Source `3b1abf3b791b4ab95f852c860786ca91d8c0a381` passed hosted Validate
-[37517856995](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37517856995)
+[37517856995](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37517856995)
 and Publish and qualify HA
-[37518413015](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37518413015).
+[37518413015](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37518413015).
 The published image is
 `ghcr.io/talisman36935/report-workshop@sha256:dfba95425f82b619987f307e63e2e2720f9395a5a2c7836ec2d2a25f7d398d23`.
 The release artifact records source/image/platform digests and declares runtime
@@ -26,15 +26,15 @@ account credential. The detailed digest list is in
 
 ## Preserved failed attempts
 
-- Run [37511656967](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37511656967)
+- Run [37511656967](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37511656967)
   published source `0ef279c` but failed native ARM smoke because the test worker
   did not start its private metrics/readiness listener. Kubernetes qualification
   also failed during node loss. The cluster deletion and ARM-process cleanup
   steps passed. This led to explicitly setting `METRICS_ADDR` in the ARM job.
-- Run [37513731105](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37513731105)
+- Run [37513731105](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37513731105)
   passed ARM but timed out waiting for two ready API and worker replicas after
   node loss. Its cluster was deleted.
-- Run [37515849648](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37515849648)
+- Run [37515849648](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37515849648)
   passed ARM but repeated the survivor-readiness timeout. Its allowlisted
   observation recorded CloudNativePG `Failing over`, two of three ready database
   instances and unready worker pods; the named cluster was deleted. The subsequent

@@ -1,9 +1,9 @@
 # Initial image release qualification
 
 Source: `0a387dd7bae483368fd97fed74b86b5db9ae376d`.
-Validate [37389924643](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37389924643)
+Validate [37389924643](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37389924643)
 passed. Publish and qualify HA
-[37390250920](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37390250920)
+[37390250920](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37390250920)
 published the image and passed native ARM migration/API/worker golden smoke.
 
 Index: `ghcr.io/talisman36935/report-workshop@sha256:35d81b3d3fee01c0d242c3788cda0a2d7b284914dd246bd21e7c660d72dfcc1f`.

@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=${TARGETO
 FROM scratch
 ARG REVISION=development
 ARG ANALYSIS_VARIANT=baseline
-LABEL org.opencontainers.image.source="https://github.com/talisman36935/gcp-platform-delivery-lab" \
+LABEL org.opencontainers.image.source="https://github.com/milesfoundry/gcp-platform-delivery-lab" \
       org.opencontainers.image.revision=${REVISION} \
       uk.whitt.lab.analysis-variant=${ANALYSIS_VARIANT}
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

@@ -13,7 +13,7 @@ from verify_anonymous_image import verify
 class AnonymousImageTests(unittest.TestCase):
     def test_rejects_mutable_or_foreign_inputs_before_network(self):
         with patch("verify_anonymous_image.urlopen") as network:
-            for image in ("ghcr.io/talisman36935/report-workshop:latest",
+            for image in ("ghcr.io/milesfoundry/report-workshop:latest",
                           "ghcr.io/other/report@sha256:" + "a" * 64):
                 with self.assertRaises(ValueError):
                     verify(image)
@@ -36,7 +36,7 @@ class AnonymousImageTests(unittest.TestCase):
             manifest["platform"] = {"os": "linux", "architecture": architecture}
             manifests.append(manifest)
         index = entry(json.dumps({"manifests": manifests}).encode())
-        image = "ghcr.io/talisman36935/report-workshop@" + index["digest"]
+        image = "ghcr.io/milesfoundry/report-workshop@" + index["digest"]
         opener = SimpleNamespace(open=lambda request, timeout: BytesIO(
             content[request.full_url.rsplit("/", 1)[1]]))
         with patch("verify_anonymous_image.build_opener", return_value=opener), patch(

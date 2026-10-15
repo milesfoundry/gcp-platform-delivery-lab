@@ -113,7 +113,7 @@ def render(*, release: dict, owner: str, namespace: str = "report-dev",
         binding["subjects"] = [{"kind": "ServiceAccount", "name": "ns-reconciler-" + namespace + "-report", "namespace": "config-management-system"}]
         resource("configsync.gke.io/v1beta1", "RepoSync", "report", {
             "sourceFormat": "unstructured", "sourceType": "git", "git": {
-                "repo": "https://github.com/talisman36935/gcp-platform-delivery-lab",
+                "repo": "https://github.com/milesfoundry/gcp-platform-delivery-lab",
                 "branch": "main", "dir": "profiles/delivery/apps", "auth": "none"}})
     else:
         resources.append({"apiVersion": "v1", "kind": "ServiceAccount", "metadata": {

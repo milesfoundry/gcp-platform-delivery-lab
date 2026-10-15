@@ -3,7 +3,7 @@
 ## Durable tracing and bounded profiles — 2026-10-04
 
 Source: `63372e9b3c3a83c4719d639cd42a5dec454ce313`.
-[Hosted run 37164242715](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37164242715)
+[Hosted run 37164242715](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37164242715)
 passed the real collector/Tempo integration, durable trace-parent and retry tests,
 existing database/race gates, and CPU/heap capture. The CPU tool output contained
 document-analysis frames, so a downloaded binary profile alone was not the gate.
@@ -13,7 +13,7 @@ comparison and trace-to-profile bridge remain outstanding.
 ## Local metrics and collector-outage gate — 2026-10-03
 
 Source: `ce56202cfc03ce50382e4ea8d51c6de5b5b61032`.
-[Hosted run 37158571002](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37158571002)
+[Hosted run 37158571002](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37158571002)
 passed the existing application/infrastructure gates plus the real Prometheus
 profile, metrics cardinality tests, strict evidence tests and recorder.
 
@@ -33,7 +33,7 @@ timestamps identify the historical run; subsequent revisions need their own chec
 ## Initial foundation — 2026-10-03
 
 Source: `23b9632`.
-[Hosted run 37145048417](https://github.com/talisman36935/gcp-platform-delivery-lab/actions/runs/37145048417)
+[Hosted run 37145048417](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/runs/37145048417)
 passed:
 
 - Go formatting, vet and race tests against an isolated PostgreSQL service.

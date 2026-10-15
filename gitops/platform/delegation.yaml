@@ -33,7 +33,7 @@ spec:
   sourceFormat: unstructured
   sourceType: git
   git:
-    repo: https://github.com/talisman36935/gcp-platform-delivery-lab
+    repo: https://github.com/milesfoundry/gcp-platform-delivery-lab
     branch: main
     dir: gitops/apps/report
     auth: none
