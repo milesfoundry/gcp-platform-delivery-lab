@@ -21,11 +21,11 @@ class PublicRedirect(HTTPRedirectHandler):
 
 def verify(image: str) -> dict:
     if not re.fullmatch(
-            r"ghcr\.io/talisman36935/report-workshop@sha256:[0-9a-f]{64}", image):
+            r"ghcr\.io/milesfoundry/report-workshop@sha256:[0-9a-f]{64}", image):
         raise ValueError("supply an exact published workload index")
     opener = build_opener(PublicRedirect())
     with urlopen("https://ghcr.io/token?service=ghcr.io&scope="
-                 "repository:talisman36935/report-workshop:pull", timeout=20) as response:
+                 "repository:milesfoundry/report-workshop:pull", timeout=20) as response:
         token = json.load(response)["token"]
     total = 0
     verified = []
@@ -34,7 +34,7 @@ def verify(image: str) -> dict:
         nonlocal total
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             raise ValueError("invalid registry content digest")
-        request = Request("https://ghcr.io/v2/talisman36935/report-workshop/" +
+        request = Request("https://ghcr.io/v2/milesfoundry/report-workshop/" +
                           kind + "/" + digest, headers={
                               "Authorization": "Bearer " + token,
                               "Accept": "application/vnd.oci.image.index.v1+json, "

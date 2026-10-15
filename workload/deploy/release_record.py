@@ -12,7 +12,7 @@ def main():
     parser.add_argument("--image", required=True)
     parser.add_argument("--revision", required=True)
     args = parser.parse_args()
-    if (not re.fullmatch(r"ghcr.io/talisman36935/report-workshop@sha256:[0-9a-f]{64}", args.image)
+    if (not re.fullmatch(r"ghcr.io/milesfoundry/report-workshop@sha256:[0-9a-f]{64}", args.image)
             or not re.fullmatch(r"[0-9a-f]{40}", args.revision)):
         parser.error("supply exact release inputs")
     raw = subprocess.run(["docker", "buildx", "imagetools", "inspect", args.image,
