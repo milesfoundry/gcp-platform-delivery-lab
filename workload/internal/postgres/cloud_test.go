@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/application"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/domain"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/application"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/domain"
 )
 
 func TestCloudStateFences(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/domain"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/domain"
 )
 
 //go:embed schema.sql

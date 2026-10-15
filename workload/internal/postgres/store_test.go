@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/domain"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/domain"
 )
 
 // Integration tests require an isolated disposable database, never a shared DB.

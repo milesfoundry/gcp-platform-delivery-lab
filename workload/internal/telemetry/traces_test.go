@@ -9,8 +9,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/domain"
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/httpapi"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/domain"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/httpapi"
 )
 
 func TestTraceResourceHasExplicitEnvironmentAndRunIdentity(t *testing.T) {

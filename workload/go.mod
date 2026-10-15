@@ -1,4 +1,4 @@
-module github.com/talisman36935/gcp-platform-delivery-lab/workload
+module github.com/milesfoundry/gcp-platform-delivery-lab/workload
 
 go 1.27.1
 

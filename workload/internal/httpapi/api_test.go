@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/talisman36935/gcp-platform-delivery-lab/workload/internal/domain"
+	"github.com/milesfoundry/gcp-platform-delivery-lab/workload/internal/domain"
 )
 
 type fakeStore struct{}
