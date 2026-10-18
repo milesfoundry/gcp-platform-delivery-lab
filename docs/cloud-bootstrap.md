@@ -1,8 +1,8 @@
 # GCP state and federated CI bootstrap
 
 The bootstrap Terraform root is separate from the disposable lab root. It declares
-GitHub federation, a CI service account, project budget/lifecycle alerts and
-explicitly reviewed project roles. Terraform state is local to a trusted operator
+GitHub federation, a CI service account, project budget/lifecycle alerts,
+explicitly reviewed project roles and opt-in persistent GKE prerequisites. Terraform state is local to a trusted operator
 or short-lived run workspace. This configuration is validated without credentials;
 activation waits for the chosen project, region, budget/lifetime and access setup.
 
@@ -34,9 +34,15 @@ References:
 ## State ownership
 
 Bootstrap owns IAM/federation/budget/alert APIs, including the shared Logging and
-Monitoring API enablement. The lab root owns GKE/network/fleet/configuration APIs
-and its Storage/Pub/Sub enablement. Both roots use local state files under their
-own `.terraform/` directories. This avoids a persistent GCS backend, but means an
+Monitoring API enablement. When `enable_lab_prerequisites=true`, it also owns the
+Compute/GKE/Fleet/Config Sync/Storage/Pub/Sub API enablement, the persistent
+`portfolio-lab-nodes` service account and its one node role, and the shared
+project-wide Config Sync Fleet feature. Those API services are configured to
+remain enabled if a Terraform state entry is removed. Keep this flag enabled
+after bootstrap; lab runs must use its exact node service account. The lab root
+owns only run-scoped network/GKE membership/configuration resources. Both roots
+use local state files under their own `.terraform/` directories. This avoids a
+persistent GCS backend, but means an
 independent provider-side run inventory/janitor is mandatory if the workflow
 runner disappears. Never upload either root's state as an Actions artifact/cache.
 Preserve state until independent provider inventory confirms deletion; then remove
@@ -58,7 +64,8 @@ Once cloud settings are approved and access is verified:
    current account baseline and remaining credit runway. The threshold is not a
    spending cap. Keep the five actual and two forecast thresholds.
    Budget/email inputs and Terraform state must stay private.
-3. Create the reviewed federation/budget/alert resources; record identifiers
+3. Create the reviewed federation/budget/alert resources; explicitly enable and
+   review the persistent GKE prerequisite resources before any lab plan; record identifiers
    privately.
 4. Confirm both roots use local state and neither uploads state to artifacts/cache.
 5. Review the minimum project role set and dedicated lifecycle workflow.

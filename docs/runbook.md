@@ -1,5 +1,19 @@
 # Validation and activation runbook
 
+## Current safety design
+
+[GCP safety and recovery design](safety-recovery-design.md) defines the current
+CP-1 ownership matrix, run manifest, state transitions, cleanup order, failure
+cases and next implementation packet. The run contract validator in
+`scripts/run_contract.py` is a credential-free policy check only; it is not a
+deployed ledger, Cloud Run reaper, janitor, cleanup implementation or cloud
+qualification. No cloud resource creation is authorized by these files.
+
+Use `python3 scripts/run_contract_cli.py intent|manifest|cleanup|controls
+<record.json>` to validate a local record or print an exact-ID dry-run plan.
+The CLI has no provider client or delete path; `controls` refuses to plan reaper
+removal until the workload inventory has passed its independent audit.
+
 ## Ephemeral HA cloud execution policy
 
 Follow the [ephemeral HA architecture and cost policy](architecture-cost.md)
@@ -24,9 +38,14 @@ go vet ./...
 # Use ONLY a disposable database: the suite truncates the jobs table.
 TEST_DATABASE_URL='postgres://workshop:local-demo-only@127.0.0.1:5432/workshop?sslmode=disable' go test -race ./...
 cd ..
-terraform fmt -check -recursive infrastructure
+terraform fmt -check -recursive infrastructure bootstrap
+python3 -m unittest discover -s scripts -p 'test_*.py' -v
+terraform -chdir=bootstrap/terraform init -input=false -lockfile=readonly
+terraform -chdir=bootstrap/terraform validate
+terraform -chdir=bootstrap/terraform test
 terraform -chdir=infrastructure/lab init -input=false -lockfile=readonly
 terraform -chdir=infrastructure/lab validate
+terraform -chdir=infrastructure/lab test
 python3 scripts/check-ownership.py
 ```
 
@@ -50,12 +69,17 @@ because validate passes. Required outstanding gates:
    never upload it as an artifact/cache or commit it. Never commit plans,
    service-account keys or environment credentials.
 3. Qualify the selected GKE/Config Sync versions and fleet RBAC behavior.
-4. Add application cloud IAM, Pub/Sub/GCS resources and adapters, image release
+4. Qualify the exact janitor IAM boundary. The current contract validator and
+   dry-run cleanup planner reject malformed manifests and wrong run IDs; they do
+   not call Google APIs or prove cross-run IAM denial. No reaper may be enabled
+   until least-privilege permission and negative cross-run tests pass.
+5. Implement the generation-conditional GCS ledger and out-of-band reaper; test
+   runner-loss recovery and independent inventory with a fake API before a
+   separately approved bounded cloud drill. Job-local Terraform state is not a
+   replacement. Cluster deletion protection must be changed explicitly for an
+   approved teardown.
+6. Add application cloud IAM, Pub/Sub/GCS resources and adapters, image release
    provenance, network policies and workload deployment.
-5. Implement run-scoped inventory, evidence export and an independent expiry
-   janitor. Job-local Terraform state is not a replacement: runner loss must still
-   permit exact-scope cleanup from ownership labels. Cluster deletion protection
-   must be changed explicitly for approved teardown.
 
 The bootstrap Terraform root includes six opt-in event-specific Monitoring log
 alerts plus the [`notify_lifecycle.py`](../scripts/notify_lifecycle.py) publisher. Once

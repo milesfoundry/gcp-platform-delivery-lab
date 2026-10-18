@@ -1,23 +1,10 @@
 locals {
-  name = "portfolio-delivery"
-  apis = toset([
-    "compute.googleapis.com", "container.googleapis.com",
-    "gkehub.googleapis.com", "anthosconfigmanagement.googleapis.com",
-    "gkeconnect.googleapis.com",
-    "storage.googleapis.com", "pubsub.googleapis.com",
-  ])
-}
-
-resource "google_project_service" "lab" {
-  for_each           = local.apis
-  service            = each.value
-  disable_on_destroy = true
+  name = var.run_id
 }
 
 resource "google_compute_network" "lab" {
   name                    = local.name
   auto_create_subnetworks = false
-  depends_on              = [google_project_service.lab]
 }
 
 resource "google_compute_subnetwork" "lab" {
@@ -51,17 +38,6 @@ resource "google_compute_router_nat" "lab" {
   }
 }
 
-resource "google_service_account" "nodes" {
-  account_id   = "portfolio-gke-nodes"
-  display_name = "Portfolio GKE nodes; no application cloud permissions"
-  depends_on   = [google_project_service.lab]
-}
-resource "google_project_iam_member" "node_service" {
-  project = var.project_id
-  role    = "roles/container.defaultNodeServiceAccount"
-  member  = "serviceAccount:${google_service_account.nodes.email}"
-}
-
 resource "google_container_cluster" "lab" {
   name                     = local.name
   location                 = var.region
@@ -75,6 +51,9 @@ resource "google_container_cluster" "lab" {
   release_channel { channel = "REGULAR" }
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
+  }
+  resource_labels = {
+    lab_run_id = var.run_id
   }
   ip_allocation_policy {
     cluster_secondary_range_name  = "pods"
@@ -95,7 +74,7 @@ resource "google_container_cluster" "lab" {
     enabled  = true
     provider = "CALICO"
   }
-  depends_on = [google_compute_router_nat.lab, google_project_iam_member.node_service]
+  depends_on = [google_compute_router_nat.lab]
 }
 
 resource "google_container_node_pool" "lab" {
@@ -116,7 +95,7 @@ resource "google_container_node_pool" "lab" {
     machine_type    = "e2-medium"
     disk_size_gb    = 30
     disk_type       = "pd-standard"
-    service_account = google_service_account.nodes.email
+    service_account = var.node_service_account_email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
     workload_metadata_config { mode = "GKE_METADATA" }
     shielded_instance_config {
@@ -135,14 +114,9 @@ resource "google_gke_hub_membership" "lab" {
     }
   }
 }
-resource "google_gke_hub_feature" "config_sync" {
-  name       = "configmanagement"
-  location   = "global"
-  depends_on = [google_project_service.lab]
-}
 resource "google_gke_hub_feature_membership" "config_sync" {
   location   = "global"
-  feature    = google_gke_hub_feature.config_sync.name
+  feature    = "configmanagement"
   membership = google_gke_hub_membership.lab.membership_id
   configmanagement {
     version = var.config_sync_version

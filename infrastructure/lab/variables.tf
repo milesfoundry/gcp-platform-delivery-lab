@@ -2,6 +2,22 @@ variable "project_id" {
   description = "Dedicated existing, billing-enabled lab project. No shared production project."
   type        = string
 }
+variable "run_id" {
+  description = "Unique lowercase run ID used in names and cloud resource labels."
+  type        = string
+  validation {
+    condition     = can(regex("^lab-[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$", var.run_id))
+    error_message = "Use a unique lab-prefixed run ID of at most 24 lowercase letters, digits, or hyphens."
+  }
+}
+variable "node_service_account_email" {
+  description = "Persistent least-privilege node identity created by the bootstrap root."
+  type        = string
+  validation {
+    condition     = var.node_service_account_email == "portfolio-lab-nodes@${var.project_id}.iam.gserviceaccount.com"
+    error_message = "Use the bootstrap-managed node service account from this exact project."
+  }
+}
 variable "region" {
   description = "London region for the regional HA lab."
   type        = string

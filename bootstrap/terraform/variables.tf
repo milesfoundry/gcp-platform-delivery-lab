@@ -16,6 +16,12 @@ variable "approved_project_roles" {
   }
 }
 
+variable "enable_lab_prerequisites" {
+  description = "Manage persistent project APIs, lab node identity and shared Config Sync feature. Keep enabled after creation."
+  type        = bool
+  default     = false
+}
+
 variable "enable_cost_alerts" {
   description = "Create the project gross-cost budget, private email channel and lifecycle log alert."
   type        = bool
