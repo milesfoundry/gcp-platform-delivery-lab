@@ -188,6 +188,15 @@ roles where predefined roles are too broad. The run cleanup identity is never
 allowed to create projects, link billing, change IAM, enable/disable APIs, manage
 budgets, or delete recovery controls.
 
+Google's current custom-role support catalogue marks the listed Compute network,
+subnetwork and router permissions; GKE cluster and operation permissions; GKE
+Hub membership, membership-feature and operation permissions; Cloud Run Job
+permissions; and Cloud Storage object permissions as supported for custom roles.
+That means these permissions can be represented in a custom role. It does not
+prove that a binding can be attached at the desired resource level, that the
+Terraform provider uses only these API calls, or that a live identity is denied
+cross-boundary actions. Those remain qualification gates.
+
 | Actor / phase | Required API operations and permissions to qualify | Binding / authority boundary | Explicit exclusions and unresolved checks |
 | --- | --- | --- | --- |
 | Project launcher — create disposable project | `resourcemanager.projects.create` | Approved parent folder/organization only | Project creation does not attach billing. Google initially grants the creator `roles/owner`; determine the approved way to remove or constrain that grant before any workload API or billable resource is enabled. |
@@ -246,6 +255,7 @@ Permission references: [Compute Engine IAM roles and permissions](https://docs.c
 [Cloud Scheduler authenticated HTTP targets](https://docs.cloud.google.com/scheduler/docs/http-target-auth),
 [Service Usage roles and permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/serviceusage),
 [Cloud Storage IAM permissions](https://docs.cloud.google.com/storage/docs/access-control/iam-permissions),
+[custom-role permission support](https://docs.cloud.google.com/iam/docs/custom-roles-permissions-support),
 [project IAM permissions](https://docs.cloud.google.com/resource-manager/docs/access-control-proj),
 and [Cloud Billing budget permissions](https://docs.cloud.google.com/billing/docs/how-to/custom-roles).
 
