@@ -123,11 +123,29 @@ requires updated cost, quota, budget-alert and failure-recovery analysis. The
 existing Terraform roots and contract still assume one dedicated lab project;
 they must not be treated as implementing per-run project isolation.
 
+Project lifecycle is a separate authority boundary: project creation requires
+`resourcemanager.projects.create` on the parent, and the Resource Manager create
+method does not attach a billing account. Billing association needs its own
+permission and verification step. Project deletion requires
+`resourcemanager.projects.delete` on the parent, so automatic project deletion
+is not part of the reaper candidate; define and qualify a separate post-audit
+reclamation path or document the retained empty project and its quota/lifecycle
+policy. For cost monitoring, the Budget API can scope an alerts-only budget to
+one project under the billing account, while Google recommends keeping
+programmatic budget-notification topics in a FinOps administration project.
+These are design capabilities, not proof that the current account has the
+required parent or billing permissions.
+
 Evidence references: [resource types that accept allow policies](https://docs.cloud.google.com/iam/docs/resource-types-with-policies),
 [IAM Condition resource attributes](https://docs.cloud.google.com/iam/docs/conditions-resource-attributes),
 [GKE API permissions](https://docs.cloud.google.com/kubernetes-engine/docs/reference/api-permissions),
 [Compute IAM roles and permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/compute),
 and [GKE IAM roles and permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/container).
+Project and billing references: [create projects](https://docs.cloud.google.com/resource-manager/docs/creating-managing-projects),
+[project create API](https://docs.cloud.google.com/resource-manager/reference/rest/v1/projects/create),
+[project IAM access control](https://docs.cloud.google.com/resource-manager/docs/access-control-proj),
+[project-filtered alerts-only budgets](https://docs.cloud.google.com/billing/docs/how-to/budget-api),
+and [programmatic budget notifications](https://docs.cloud.google.com/billing/docs/how-to/budgets-programmatic-notifications).
 
 ## Durable run record and state machine
 
