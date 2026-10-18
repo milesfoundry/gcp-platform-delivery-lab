@@ -8,27 +8,45 @@ cloud resources, or spending.
 
 The current design candidate uses one disposable Google Cloud project for each
 run, with a separate persistent recovery/FinOps project. The latter hosts the
-private durable GCS ledger and reviewed reaper image. Each run has its own Cloud
-Run Job and unique execution identity in the recovery project. The run project
-hosts that run's Cloud Scheduler job and invocation identity. The scheduler
-calls `https://run.googleapis.com/v2/projects/{recovery-project}/locations/{location}/jobs/{job}:run`
+private durable GCS ledger, private Terraform state, and reviewed reaper image.
+Each run has its own Cloud Run Job, execution identity, Cloud Scheduler job, and
+Scheduler invocation identity in the recovery project. Create and verify these
+run controls, plus the durable `provisioning` manifest, before creating or
+linking the disposable project. The Scheduler calls
+`https://run.googleapis.com/v2/projects/{recovery-project}/locations/{location}/jobs/{job}:run`
 with an OAuth token and can invoke only its corresponding Job. The Job's fixed
 configuration carries its run ID, target project, and ledger object name; the
-Scheduler request cannot supply execution overrides. The reaper identity can
-clean only the corresponding run project and access only its known ledger
-object path. A shared reaper execution identity is disallowed because it would
+Scheduler request cannot supply execution overrides. Its runtime identity can
+clean only the corresponding run project and access only its known ledger object
+path. A shared reaper execution identity is disallowed because it would
 accumulate access to every run project.
 
 This is a design candidate, not a qualified service or cloud-ready permission
-set. The Cloud Scheduler internal-target same-project restriction applies to
-internal Cloud Run URLs; this candidate instead calls the Google API endpoint
-`run.googleapis.com` with OAuth, which must be qualified end to end. Keep
-Terraform state local and private; preserve it through ordinary teardown and
-independent audit. If the workflow runner is lost, the reaper acts from the
-durable run record and provider APIs without depending on local state. The
-recovery project, ledger, image, and audit procedure have persistent storage
-and control-plane cost; measure and alert on them, and assign their owner,
-retention, backup and eventual project-close procedure.
+set. The Scheduler and invocation account share the persistent recovery project;
+the target is the Google Cloud Run Jobs API endpoint, which uses OAuth. Qualify
+the exact request, token, job-level invoker binding, retry behavior and API
+enablement end to end. Keep Terraform state in a private per-run GCS bucket in the recovery project,
+separate from the manifest ledger, and retain it through ordinary teardown and
+independent audit. The reaper acts from the durable run
+record and provider APIs, never Terraform state, so runner/state loss does not
+block cleanup. If recovery-project IAM or its Google API control plane is
+unavailable, use the separate human operator recovery path after access returns;
+do not claim recovery from total project/control-plane loss. The recovery
+project, ledger, state buckets, images, per-run Jobs/Schedulers and audit
+procedure have ongoing cost. Measure and alert on them, and assign their owner,
+retention, private backup, and eventual project-close procedure.
+
+Recovery bootstrap must be registered before its first create. Write a
+create-only `provisioning` manifest with deterministic expected Job, service
+account, Scheduler, project and budget identifiers before creating any run
+control. Record each control create request and response. If the runner is lost
+before the reaper Job and Scheduler are both verified, no disposable project or
+billable workload resource may be created; the recovery-project operator resumes
+or removes the partial controls using the manifest and audit APIs. Only after
+the trigger is verified may project creation/linking proceed. The post-audit
+operator deletes these recovery controls after the run is closed. This leaves a
+small control-plane bootstrap failure window recovered manually rather than by
+the not-yet-created per-run trigger.
 
 The GCS ledger is independent of the runner and Kubernetes management plane, but
 shares the GCP project and provider control plane. If project IAM, Cloud Scheduler,
@@ -37,6 +55,53 @@ existing privileged human workflow after access is restored. Do not claim recove
 from total project/control-plane loss. Cloud Asset Inventory is an additional
 discovery source, not the sole cleanup proof: Google documents its current asset
 data as eventually consistent and best effort ([asset types](https://docs.cloud.google.com/asset-inventory/docs/asset-types)).
+
+### Human recovery and host-loss boundary
+
+Define four separate duties before activation: the GitHub/run launcher, the
+recovery-control operator, the project/billing operator and the read-only
+independent auditor. The human recovery operator uses a separately authenticated
+MFA identity, private runbook and recovery-project access; the cleanup runtime
+identity is never reused. The exact human principals, parent-folder grant,
+billing-account grant and backup administrators are unresolved until the
+account owner records them. No new run starts without that mapping.
+
+The recovery path is:
+
+1. Stop new launches and preserve the failing run's immutable manifest generation,
+   run ID, control IDs, project ID and last state generation. If GCS is available,
+   read the exact object; use an auditor/operator identity to list manifests when
+   the launcher does not know an object path.
+2. If the recovery project or ledger is unavailable, restore the manifest from
+   the separately administered private backup. Restore state only into a new
+   generation or recovery copy; never overwrite the last retained generation.
+   Record the source generation, checksum, state lineage/serial and restore
+   operator. The backup location, encryption key owner and restore procedure
+   must be chosen and recovery-tested before activation.
+3. Compare the manifest's expected control IDs with exact Cloud Run Job,
+   Scheduler and service-account reads. Resume incomplete control bootstrap or
+   remove only recorded partial controls after confirming no run project exists
+   and no create request is unresolved. A `prepared` record with no project-create
+   request is an empty run; the Job makes no project mutations. The operator
+   records the no-project audit and reclaims its Scheduler, Job and identities.
+4. For project-create or billing-link requests with a lost response, the project/
+   billing operator reconciles by the fixed project ID and billing account. The
+   reaper has read-only exact-ID project lookup and no project/billing mutation
+   authority. Ambiguous project or billing state remains `incomplete` until the
+   operator reconciles it; no API enablement or workload creation continues.
+5. If the recovery project itself is lost, recreate its control plane from
+   reviewed infrastructure source, restore the manifest/state backup, inspect
+   every recorded run project through read-only service APIs, then resume cleanup
+   with a newly reviewed per-run job/trigger. This candidate covers loss of the
+   recovery project while the separate backup project, organization IAM and
+   Google APIs remain available. It does not cover loss of the organization,
+   billing account, backup project, or Google Cloud control plane; stop and use
+   Google support/account recovery for those events.
+
+The recovery and backup projects, state/ledger retention, monitoring and empty
+project retention have real cost. Their owner, separate administrator, billing
+source, restore objective, recovery-time objective and retention period must be
+recorded before CP-1A exits. No such values are currently qualified.
 
 ## Ownership and resource coverage
 
@@ -51,18 +116,49 @@ Inventory supplements these checks because it can lag.
 
 | Resource / current owner | Run identity and recovery lookup | Ordered cleanup and independent audit | Cost / retention |
 | --- | --- | --- | --- |
-| Lab API enablements — bootstrap Terraform root | Project ID plus explicit API service name; project-level services are shared controls, not run-tagged | Keep enabled during run cleanup and bootstrap state removal; disable only under a separate project-close plan after confirming no other project use | Usually control-plane configuration; retained project setting, verify current billing treatment |
+| Run API enablements — currently `google_project_service.bootstrap` in bootstrap Terraform | New run project ID plus exact service name; only enable after expiry controls are verified; service agents created as side effects are derived run assets | Keep enabled during cleanup; disable only after workload audit and before project reclamation if needed; independently list service agents and APIs | API enablement usually has no direct charge; service-agent resources and enabled services may have downstream costs |
 | VPC — lab Terraform root | Add `lab_run_id` label if the provider/API supports it; otherwise unique VPC name; exact project/network self-link | Delete after subnet, router/NAT and cluster dependencies; verify exact VPC absent | Project resource, run lifetime |
 | Subnet and secondary ranges — lab root | Run-specific name and VPC URI; confirm tag support | Delete after cluster and router/NAT; audit exact self-link | Project resource, run lifetime |
 | Router and Cloud NAT — lab root | Run-specific names and router/subnetwork URIs; confirm tag support | Delete NAT, then router, after cluster; audit NAT config and router absence | Billable while present; include setup/deletion interval |
-| GKE cluster and zonal node pool — lab root | Cluster resource labels include run ID; unique cluster/name; node pool tied to cluster; inventory exact cluster ID and all zones | Drain/stop application producers, export bounded evidence, remove run Config Sync membership/config in reviewed dependency order, then delete cluster normally with deletion protection explicitly disabled for teardown; audit cluster and every node instance absent | Main billable resource; deadline begins before first billable bootstrap resource |
-| Fleet membership/config — lab root; Config Sync Feature — bootstrap root | Membership namespaced by run cluster ID; the project-wide `configmanagement` Feature is a shared singleton and is protected from destroy | Remove run feature membership/config before cluster/network; keep the singleton Feature under bootstrap ownership through all runs | Potential feature/service charge; explicitly measure and record |
-| Node service account and project role — bootstrap root | One persistent `portfolio-lab-nodes` identity with only `roles/container.defaultNodeServiceAccount`; it is never in the run manifest | Retain across runs; reaper never mutates project IAM policy or deletes this identity | Persistent least-privilege project identity; no application cloud permissions |
+| GKE cluster and zonal node pool — lab root | Cluster resource labels include run ID; unique cluster/name; record exact cluster ID, each node-pool ID and all zones | Drain/stop application producers, export bounded evidence, remove run Config Sync membership/config in reviewed dependency order, delete each node pool then delete cluster normally with deletion protection explicitly disabled for teardown; audit cluster, pools and every node instance absent | Main billable resource; deadline begins before first billable bootstrap resource |
+| Fleet membership, Config Sync membership feature and `configmanagement` Feature — currently lab and bootstrap roots | All are per-run in the disposable project; exact project/location/name and membership IDs go in the manifest. The Fleet Feature is a project-scoped singleton, but is not shared across disposable projects | Remove Config Sync membership feature, then Fleet membership, then the now-unused per-run Feature; independently verify each exact ID absent before deleting the cluster/network | Config Sync/service charges and API use are run costs; confirm billing treatment and deletion semantics |
+| Node service account and project role — currently bootstrap root | Create one run-specific node identity in that run's project with only `roles/container.defaultNodeServiceAccount`; record service-account email and IAM binding as run-owned | Do not let the reaper change IAM. Remove through separately authorized project reclamation after GKE is absent; project deletion is the final authority boundary | No application cloud permissions; role binding is project scoped and disappears with the project |
 | Future Pub/Sub topics/subscriptions and GCS report objects — CP-2 workload Terraform | Every topic/subscription/object carries run ID or lives under a dedicated run prefix; store exact full resource URI/object generation | Stop publishers, drain/delete subscriptions and queues; export evidence; delete only run-owned object generations after evidence verification; audit queues and versions absent | Include retained versions/egress/operations; evidence copies are separately allowlisted |
 | Bootstrap WIF pool/provider, CI service account, IAM grants — bootstrap root | Explicit bootstrap owner record, not a run ID | Keep through active run and audit; remove only in reviewed bootstrap/project-close sequence after run inventory is empty | Retained exception until explicit removal; protect from janitor |
 | Existing project billing budget and Monitoring channel/policies — bootstrap/account owner | Existing verified object IDs; import/reconcile before managing, never create competing objects blindly | Keep alerting through teardown and delayed billing review; remove only through explicit account closeout | Budget is a warning, not a cap; recipient config/state remain private |
 | Private GCS run ledger and per-run Cloud Run Job — recovery/FinOps project owner | One known ledger object path and unique Job/runtime identity per run; image is shared, execution identity is not | Preserve the record through independent audit; reaper cannot delete its Job, identity, bucket, or project | Ledger, bucket, and execution-control costs persist; measure and alert |
-| Cloud Scheduler job and invocation identity — run-project owner | Unique scheduler, service account in the same project, fixed OAuth request to the exact recovery-project Job `:run` endpoint | Keep active through workload cleanup and independent audit; delete with the run project only after the external audit gate; scheduler identity has `roles/run.invoker` on that Job alone | Active-run scheduler charge; included in project lifecycle estimate |
+| Per-run Cloud Scheduler job and invocation identity — recovery-project control-plane owner | Unique scheduler and service account in the recovery project, fixed OAuth request to the exact matching recovery-project Job `:run` endpoint | Create before the disposable project; retain through workload cleanup and independent audit. Scheduler identity has `roles/run.invoker` on its Job alone. Delete only in post-audit reclamation. | Persistent control-plane resource during a run; include Scheduler and Job charges in cost estimate. A bootstrap failure before the scheduler is verified requires operator recovery and must not create the disposable project. |
+| In-cluster GitOps resources — `gitops/platform` and `gitops/apps/report` | Namespace, quota, NetworkPolicy, Role/RoleBinding, Config Sync root, RepoSync and report ConfigMap belong to the per-run cluster; record repository revision and root IDs | Capture bounded sanitized evidence; remove RepoSync/root and Config Sync membership in reviewed order, then delete the cluster; independently confirm no workload survives cluster removal | Cluster runtime cost; evidence copies follow their separate retention policy |
+| GKE and Service Usage derived resources — Google-managed service agents, node VMs/disks, addresses, logs/metrics and artifacts | Associate with the run by exact parent project and GKE cluster/node-pool IDs. Record provider-returned IDs and documented derived resource classes when no stable child ID is returned | Stop producers, remove their owning GKE/Fleet/network resources in dependency order, then independently query Compute, GKE, GKE Hub, Service Usage and billing inventory. Any unexplained resource keeps the run `incomplete` | Include node disks, addresses, logs/metrics and retained artifacts in estimate and later billing reconciliation |
+| Terraform state — currently two local backends; candidate private remote state in recovery project | Dedicated bucket per run, exact state object, lineage/serial, generation and source root recorded in manifest; independent backup has its own recovery ID | State is not cleanup authority. Retain through empty-resource audit and billing review; verify export/restore before later destruction; delete only by state owner after evidence retention | State includes sensitive values; version and backup retention cost; never attach state to artifacts or ledger |
+
+### Current Terraform and GitOps inventory mapped to the candidate
+
+The following are the exact source addresses in this repository today. Their
+current ownership is a single existing project; the candidate placement column
+is the required split before any per-run project lifecycle can be implemented.
+No address in this table means that a cloud object exists or has been applied.
+
+| Current source address / files | Present role | Candidate owner and inventory treatment |
+| --- | --- | --- |
+| `google_compute_network.lab`, `google_compute_subnetwork.lab`, `google_compute_router.lab`, `google_compute_router_nat.lab` — `infrastructure/lab/main.tf` | VPC, subnet with pod/service ranges, Cloud Router and NAT | Per-run lab root in disposable project; record full IDs, router NAT config, dependencies and generated addresses; cleanup by exact IDs |
+| `google_container_cluster.lab`, `google_container_node_pool.lab` — `infrastructure/lab/main.tf` | Regional GKE cluster with three zonal nodes and managed pool | Per-run lab root; record cluster ID, node-pool ID, zones and deletion-protection state. Managed VMs/disks and control-plane services are derived assets and must be audited |
+| `google_gke_hub_membership.lab`, `google_gke_hub_feature_membership.config_sync` — `infrastructure/lab/main.tf` | Registers cluster and applies Config Sync configuration | Per-run lab root; exact membership and feature-membership IDs; remove configuration before membership and cluster |
+| `google_project_service.bootstrap[*]` — `bootstrap/terraform/main.tf` | Enables IAM, STS, Resource Manager, Billing Budgets, Monitoring, Logging and optional lab APIs in the existing project | Split: recovery/control-plane APIs stay in recovery project; Compute, GKE, GKE Hub, Config Management, Connect, Storage and Pub/Sub workload APIs are enabled in the disposable project only after its recovery trigger is verified. Record API names and service-agent side effects |
+| `google_service_account.lab_nodes[0]`, `google_project_iam_member.lab_node_service[0]` — bootstrap root | Shared node SA and project-level default node role | Replace with one run-specific service account and binding in disposable project; record both. Reaper cannot change IAM; separate project reclamation handles them |
+| `google_gke_hub_feature.config_sync[0]` — bootstrap root | `configmanagement` Feature in current project | Create one Feature per disposable project as prerequisite to its membership feature; include `gkehub.features.get/create/delete` and operation polling in qualification |
+| `google_service_account.ci`, `google_iam_workload_identity_pool.github`, `google_iam_workload_identity_pool_provider.github`, `google_service_account_iam_member.federation`, `google_project_iam_member.approved_apply_roles[*]` — bootstrap root | GitHub OIDC federation and current project apply grants | Keep under separate provisioner/control-plane ownership. The project creator/billing linker is separate authority; its exact parent and billing scope, initial project Owner grant handling and short-lived credential path remain unresolved |
+| `google_monitoring_notification_channel.cost_email["enabled"]`, `google_billing_budget.cost_alerts["enabled"]`, `google_monitoring_alert_policy.lifecycle_events[*]` — bootstrap root | Existing project email channel, GBP alert budget and six log alert policies | Reconcile the verified existing project budget; per-run project alert budgets and delivery route are created by cost operator, not the reaper. Preserve evidence of tested recipient delivery and delayed cost reconciliation |
+| `gitops/platform/{namespace,quota,network-policy,role,role-binding,root}` and `gitops/apps/report/{repo-sync,config-map}` | In-cluster objects reconciled by Config Sync | Per-run cluster contents. Record source revision and root inventory; preserve bounded evidence, then remove through Config Sync and cluster teardown |
+
+The current bootstrap root therefore mixes persistent identities, account-level
+budgeting, project APIs, node identity and the Config Sync Feature. It must be
+split before implementation: recovery/control-plane Terraform owns the ledger,
+state bucket, reaper image/Jobs/Schedulers and provisioner controls; the run
+root owns run APIs, network, GKE, Fleet membership/Feature and node identity;
+the project launcher and cost operator own project creation, billing attachment
+and project-filtered budgets. Keep source roots and state prefixes separate so
+`terraform destroy` cannot cross these owner boundaries.
 
 The exact provider permission set for the reaper is a CP-1B exit check. Derive
 permissions from the API operations above and test denied operations. Do not use
@@ -71,8 +167,9 @@ provisioning identity, GKE node identity, janitor execution identity and human
 recovery identity. The reaper must not receive `resourcemanager.projects.setIamPolicy`:
 Google authorizes that permission at project scope, so it could rewrite unrelated
 project grants ([permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/resourcemanager)).
-The node service account and its one GKE node role therefore live in bootstrap,
-not in the run manifest. GKE cluster deletion and Compute network deletion have
+In a disposable-project design, the node service account and its node role are
+created per run and recorded as run-owned project resources; the reaper still
+does not mutate project IAM. GKE cluster deletion and Compute network deletion have
 distinct permissions and may support lower-level resource grants; validate their
 resource-name condition support before selecting roles ([GKE permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/container),
 [Compute resource access](https://docs.cloud.google.com/compute/docs/access/managing-access-to-resources)).
@@ -142,7 +239,8 @@ Candidate placement and identity split, pending exact API-role review:
 
 | Boundary | Candidate placement and identity | Required limitation |
 | --- | --- | --- |
-| Run workload and run scheduler | One new project per run; scheduler job and its invocation service account live there | Scheduler identity calls the Google Cloud Run Jobs API endpoint with OAuth and has `roles/run.invoker` on only that run's recovery-project Job. It has no cleanup access. The API endpoint path and fixed request body are immutable run controls. |
+| Run workload and project lifecycle | One new project per run; only run-owned workload, API enablement, Config Sync Feature, node identity and derived service agents live there | The project contains no ledger, Terraform state, reaper, scheduler, budget-notification topic or shared recovery identity. Project create/link and final project deletion belong to separate operator control-plane steps. |
+| Per-run expiry trigger | One Scheduler job and invocation service account per run in the persistent recovery project; create and verify before creating/linking the run project | Scheduler identity calls the matching recovery-project Cloud Run Jobs API endpoint with OAuth and has `roles/run.invoker` on only that run's Job. No cleanup access or overrides. If trigger bootstrap is incomplete, operator recovers it and the run project is not created. |
 | Reaper execution | One Cloud Run Job per run in the persistent recovery project, built from the same reviewed generic image; unique runtime service account per run | That identity receives only the run-project cleanup role and a conditional ledger-object grant. It cannot change project IAM, invoke other Jobs, or delete its project/Job/identity. Do not share the runtime identity across runs. |
 | Run record | Private GCS object path per run in the persistent recovery/FinOps project | Use generation compare-and-swap on a known object name; condition object get/create/update/delete grants on that run path. Do not grant `storage.objects.list`: IAM Conditions cannot restrict that permission to a prefix using `resource.name`. Independent audit uses separate project inventory APIs. Preserve closed-manifest generations for evidence/audit. |
 | Cost notifications | Alerts-only budget filtered to the run project under its billing account; Pub/Sub notification topic in the persistent recovery/FinOps project | Billing-account budget management and topic IAM belong to the launcher/operator control plane, not the cleanup identity. Test notification delivery before creating billable run resources. |
@@ -190,8 +288,8 @@ budgets, or delete recovery controls.
 
 Google's current custom-role support catalogue marks the listed Compute network,
 subnetwork and router permissions; GKE cluster and operation permissions; GKE
-Hub membership, membership-feature and operation permissions; Cloud Run Job
-permissions; and Cloud Storage object permissions as supported for custom roles.
+Hub Feature, membership, membership-feature and operation permissions; Cloud Run
+Job permissions; and Cloud Storage object permissions as supported for custom roles.
 That means these permissions can be represented in a custom role. It does not
 prove that a binding can be attached at the desired resource level, that the
 Terraform provider uses only these API calls, or that a live identity is denied
@@ -199,14 +297,15 @@ cross-boundary actions. Those remain qualification gates.
 
 | Actor / phase | Required API operations and permissions to qualify | Binding / authority boundary | Explicit exclusions and unresolved checks |
 | --- | --- | --- | --- |
-| Project launcher — create disposable project | `resourcemanager.projects.create` | Approved parent folder/organization only | Project creation does not attach billing. Google initially grants the creator `roles/owner`; determine the approved way to remove or constrain that grant before any workload API or billable resource is enabled. |
+| Project launcher — create disposable project | `resourcemanager.projects.create`; `resourcemanager.projects.get` for exact-ID reconciliation | Approved parent folder/organization only | Project creation does not attach billing. Google initially grants the creator `roles/owner`; determine the approved way to remove or constrain that grant before any workload API or billable resource is enabled. |
 | Project launcher — attach billing | `billing.resourceAssociations.create` on the billing account and `resourcemanager.projects.createBillingAssignment` on the new project | Billing-account and project scopes, held by the account's separate billing operator | Verify the target billing account, billing state, and project ID before attachment. The reaper cannot link/unlink billing. |
-| Bootstrap controller — enable required APIs and create run controls | `serviceusage.services.enable/get/list`; `cloudscheduler.jobs.create/get/list/update/delete`; `iam.serviceAccounts.create/get/list/delete`; `iam.serviceAccounts.actAs` on the target invocation account; `run.jobs.setIamPolicy` on the matching recovery Job to grant its invoker; Scheduler's Google-managed service agent retains `roles/cloudscheduler.serviceAgent` so it can mint the request token | Disposable project for APIs, Scheduler job and invocation account; recovery Job IAM change is constrained to that Job | Do not grant `serviceusage.services.disable` to cleanup. Do not copy existing-project WIF, node identity, Config Sync singleton, budget, or shared controls into the per-run project without a new design. API enablement can create service agents; inventory those as provider-managed dependencies. Verify the service-agent grant and exact IAM write path; never grant the Scheduler service-agent role to the runtime account. |
+| Bootstrap controller — enable required APIs and create run controls | `serviceusage.services.enable/get/list` in each required project; `cloudscheduler.jobs.create/get/list/update/delete`; `iam.serviceAccounts.create/get/list/delete`; `iam.serviceAccounts.actAs` on the target invocation account; `run.jobs.setIamPolicy` on the matching recovery Job to grant its invoker; Scheduler's Google-managed service agent retains `roles/cloudscheduler.serviceAgent` so it can mint the request token | Scheduler job and invocation account plus matching Job IAM change are in the recovery project. Enable run-project APIs only after its expiry trigger is verified. | Do not grant `serviceusage.services.disable` to cleanup. Keep shared WIF/provisioner identities, ledger/state, budget-notification topic and reaper controls out of the run project. Create the node identity, Config Sync Feature and run-only APIs inside the run project. API enablement can create service agents; inventory those as provider-managed dependencies. Verify the service-agent grant and exact IAM write path; never grant the Scheduler service-agent role to the runtime account. |
 | Reaper — network discovery and cleanup | `compute.networks.get/list/delete`; `compute.subnetworks.get/list/delete`; `compute.routers.get/list/update/delete`. Removing Cloud NAT is a router update; NAT is router configuration, not an independently deleted router resource. | Project-level custom role in the one disposable run project; the project contains no shared recovery controls | No project IAM mutation, API disablement, route-wide or project-wide bulk delete. Confirm each permission's custom-role support and provider's actual calls. The isolated project is the cross-run boundary; name checks are an additional guard only. |
-| Reaper — GKE discovery and cleanup | `container.clusters.get/list/update/delete`; `container.operations.get/list`. `container.clusters.update` is needed for the reviewed deletion-protection transition and node-pool operations. | Same disposable run project | No `container.clusters.getCredentials` and no Kubernetes credentials; no cluster create, IAM grant, or unrelated GKE feature mutation. Verify list/discovery behavior and whether update permissions can be scoped more narrowly. |
-| Reaper — Fleet / Config Sync run membership | `gkehub.memberships.get/list/delete`; `gkehub.membershipfeatures.get/list/delete`; `gkehub.operations.get/list` if asynchronous operations require polling | Same disposable run project, after confirming the membership and membership-feature resources inherit the run project boundary | Never delete/update the project-wide `configmanagement` Feature or mutate Fleet/project IAM. Verify provider calls and resource-level grantability. |
+| Reaper — GKE discovery and cleanup | `container.clusters.get/list/update/delete`; `container.nodePools.get/list/delete`; `container.operations.get/list`. `container.clusters.update` is needed for the reviewed deletion-protection transition. | Same disposable run project | No `container.clusters.getCredentials` and no Kubernetes credentials; no cluster create, IAM grant, or unrelated GKE feature mutation. Delete recorded node pools before the cluster; verify list/discovery behavior and whether update permissions can be scoped more narrowly. |
+| Reaper — Fleet / Config Sync run membership | `gkehub.memberships.get/list/delete`; `gkehub.membershipfeatures.get/list/delete`; `gkehub.operations.get/list` if asynchronous operations require polling | Same disposable run project, after confirming the membership and membership-feature resources inherit the run project boundary | Delete only the per-run `configmanagement` Feature after its membership is absent; never mutate Fleet or project IAM policies from the reaper. Verify provider calls and resource-level grantability. |
+| Reaper — per-run Config Sync Feature | `gkehub.features.get/delete`; `gkehub.operations.get/list` where deletion is asynchronous. `gkehub.features.create` belongs to the run provisioner, not reaper | Exact Feature in the disposable run project; remove only after membership feature and membership are absent | Never touch a feature in another project; verify provider API calls and project-level scope. The API parent is the project/location (`projects/*/locations/*`). |
 | Reaper runtime — read/update durable manifest | At minimum `storage.objects.get` and the write permissions required by the selected JSON API method. Replacing an existing object can require `storage.objects.create` plus `storage.objects.delete`; metadata updates use `storage.objects.update`. Use generation-match preconditions on every state transition. | Conditional binding to the exact `runs/{run_id}/manifest.json` object in the recovery bucket, with uniform bucket-level access | Never grant `storage.objects.list`, bucket administration, object IAM policy, or access to other run paths. Confirm CAS method permissions and retention/versioning semantics in fake and isolated integration tests; retain closed generations for audit. |
-| Scheduler execution identity — trigger its reaper | `run.jobs.run` via `roles/run.invoker` bound to only the matching per-run Cloud Run Job | Job resource in the recovery project; Scheduler job and its service account stay in the matching run project | No cleanup permissions and no invocation of any other reaper Job. Verify the Cloud Scheduler service-agent token-creation path, OAuth request, fixed request body, retries, and exact Job IAM binding end to end. |
+| Scheduler execution identity — trigger its reaper | `run.jobs.run` via `roles/run.invoker` bound to only the matching per-run Cloud Run Job | Job resource, Scheduler job and Scheduler service account all stay in the recovery project; use one invocation identity per run | No cleanup permissions and no invocation of any other reaper Job. Verify the Cloud Scheduler service-agent token-creation path, OAuth request, fixed request body, retries, and exact Job IAM binding end to end. |
 | Recovery-control provisioner — create per-run reaper | Cloud Run Job get/create/update/delete permissions (`run.jobs.get/create/update/delete`), `run.jobs.setIamPolicy` for only that Job, `iam.serviceAccounts.actAs` for its unique execution service account; Artifact Registry read on the reviewed image repository | Recovery project, Job resource, service account and image repository; separate short-lived provisioner authority | This control-plane identity is not the runtime identity. It must not be shared with the run cleanup identity or included in a run-project role. Verify exact image pull and Job create permissions using the selected deployment method. |
 | Cost operator — alerts and topic | `billing.budgets.create/get/list/update/delete` on the billing account; Pub/Sub topic create/get/publish policy operations in the recovery/FinOps project; required project/billing association reads | Billing account and recovery/FinOps project, operated outside both Scheduler and reaper identities | Alert-only budgets are not caps. Discover/import the existing GCP Lab budget and recipient before deciding whether to create per-run budgets. Validate delivery before the first billable resource. |
 | Independent auditor — verify absence and reconcile cost | Read-only `get/list` for Compute, GKE and GKE Hub resources in the run project; `resourcemanager.projects.get`; billing association and budget reads; optional Cloud Asset Inventory search | Separate human or read-only audit identity, independent of the reaper runtime and its state | Cloud Asset Inventory is supplementary and eventually consistent. Require service-specific absence checks and a separate reviewer before `closed`; auditor has no delete or IAM-write permission. |
@@ -224,7 +323,8 @@ as an incomplete teardown. Keep `resourcemanager.projects.setIamPolicy`,
 
 Candidate teardown order is: stop application producers and preserve bounded
 evidence; delete the run Config Sync membership feature; delete the Fleet
-membership; delete the GKE cluster normally (which owns its node pool); remove
+membership; delete the per-run `configmanagement` Feature after its membership
+is gone; delete the GKE cluster normally (which owns its node pool); remove
 Cloud NAT configuration from the router; delete the router; delete the subnet;
 delete the VPC; then independently get/list each recorded type until absent.
 Keep the Scheduler and manifest available until the independent audit passes.
@@ -250,6 +350,7 @@ and [programmatic budget notifications](https://docs.cloud.google.com/billing/do
 Permission references: [Compute Engine IAM roles and permissions](https://docs.cloud.google.com/compute/docs/access/iam),
 [GKE API permissions](https://cloud.google.com/kubernetes-engine/docs/reference/api-permissions),
 [GKE Hub roles and permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/gkehub),
+[create Fleet Feature API](https://docs.cloud.google.com/kubernetes-engine/fleet-management/docs/reference/rest/v1alpha/projects.locations.features/create),
 [Cloud Run IAM permissions](https://docs.cloud.google.com/run/docs/reference/iam/permissions),
 [Cloud Scheduler roles and permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/cloudscheduler),
 [Cloud Scheduler authenticated HTTP targets](https://docs.cloud.google.com/scheduler/docs/http-target-auth),
@@ -265,9 +366,20 @@ Store one private JSON manifest per run in the GCS ledger bucket. Use Cloud
 Storage object generation preconditions for create/update compare-and-swap; a
 stale writer must receive a precondition failure, not overwrite a newer cleanup
 state ([request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions)).
-Enable object versioning/retention only if the cost and deletion semantics are
-approved; no secret, kubeconfig, Terraform state, plan, raw log or profile binary
-belongs in the ledger.
+The current Terraform roots use local backends at
+`bootstrap/terraform/.terraform/ephemeral-bootstrap.tfstate` and
+`infrastructure/lab/.terraform/ephemeral-lab.tfstate`; those are not durable and
+are not backed up by GitHub Actions. The candidate replaces lab state with an
+encrypted, uniform-access GCS state bucket dedicated to that run in the
+persistent recovery project. Control-plane state uses a different bucket and
+owner. Enable object versioning, retention and a separately administered
+private backup before the first apply; test restore of
+both current and previous state generations. The Terraform execution identity
+receives access only to the matching run's bucket; the reaper receives no
+state-bucket access. State can be recovered only while the recovery project's
+IAM and GCS control plane are available; total recovery-project loss requires
+the independent backup operator and copy. The ledger remains separate and
+contains no secret, kubeconfig, Terraform state, plan, raw log or profile binary.
 
 Required manifest fields:
 
@@ -276,8 +388,13 @@ Required manifest fields:
 - Exact Terraform source revision, image digest, plan checksum, Config Sync/image
   tool versions and reviewed intent checksum.
 - State, state generation, lease owner/expiry, last heartbeat and monotonic event
-  sequence; allowed states are `prepared`, `provisioning`, `ready`,
-  `teardown_requested`, `cleaning`, `auditing`, `closed`, `incomplete`.
+  sequence. Model control bootstrap, prepared/armed, project-create requested,
+  project-created, billing-link requested, project-linked, API enablement,
+  workload provisioning, ready, teardown requested, cleaning, auditing, closed
+  and incomplete as explicit states or monotonic phases. A create/link request is
+  persisted before calling GCP so a lost response is discoverable by exact ID.
+  The reaper must never guess whether a project was created or billed; ambiguous
+  outcome becomes `incomplete` and invokes the project/billing operator path.
 - Per-resource expected type, canonical provider URI, discovery key, dependency
   edges, ownership evidence, first-seen/last-seen time, delete attempts/results,
   and independent audit result. Never store bearer credentials or sensitive
@@ -286,16 +403,33 @@ Required manifest fields:
   observation time, net-cash estimate and later billing reconciliation reference.
 - Immutable links/checksums to sanitized evidence and an explicit limitation list.
 
-Creation order: validate intent and exact identity -> create/verify persistent
-ledger/reaper control -> write `prepared` manifest with create-only generation
-precondition -> record fixed deadline and start the five-minute reaper -> only
-then create billable run resources. Record `provisioning` and each resource
-before/after provider calls. Never reset the deadline or extend expiry in place;
-a new attempt gets a new run ID and separately reviewed budget.
+Creation order: validate intent and exact identity -> write a create-only
+`control_bootstrapping` manifest with deterministic expected control/project/
+budget IDs and fixed expiry -> create the per-run reaper Job, execution identity,
+Scheduler job and invocation identity in the recovery project, recording each
+request and response -> verify the fixed OAuth target and Job-level invoker
+binding -> transition to `prepared` and enable the five-minute schedule ->
+persist `project_create_requested`, then create the disposable project by its
+fixed ID -> persist `billing_link_requested`, attach billing and verify the
+association -> attach/test its alerts-only budget -> enable required APIs and
+record service-agent side effects -> create billable workload resources and
+transition through `provisioning` to `ready`. The Job treats `prepared` as no
+run project yet; it may only verify no exact project exists and must not create
+or delete one. If expiry occurs while still `prepared`, it records the empty
+run-project audit and alerts the operator; the record remains open until that
+operator removes the scheduled trigger, Job and identities and the independent
+auditor records their absence. For a lost create/link response, the Job performs
+read-only exact-ID reconciliation; if billing or project state is ambiguous, it
+marks `incomplete` and alerts the separately authorized operator. No workload API is
+enabled until project creation, billing, budget ownership and expiry control
+are verified. Record each request before the provider call and response after
+it. Never reset the deadline or extend expiry in place; a new attempt gets a new
+run ID and separately reviewed budget.
 
 The reaper acquires a short manifest lease using generation preconditions, reads
 the immutable project/region/ID scope, and ignores closed runs. At deadline it
-atomically moves `ready` or `provisioning` to `teardown_requested`, performs the
+atomically moves any project-created or workload state to `teardown_requested`,
+performs the
 documented reverse-dependency cleanup, records each response, and re-lists exact
 resource types until absence is independently established. `closed` requires a
 complete audit plus no billable run resources. Any permission error, ambiguous
@@ -314,11 +448,12 @@ CP-3. If they cannot, stop and get a concrete policy decision before activation.
 
 | Failure | Required behaviour |
 | --- | --- |
-| Runner killed before first resource | Prepared manifest/reaper sees no resources; records audited empty result and closes only after independent list checks |
+| Runner killed before first recovery control | `control_bootstrapping` manifest lets the human operator reconcile partial controls; no run project or workload API may be created until trigger verification |
+| Expiry fires while run is only `prepared` | Reaper confirms no project-create request and no project at the exact ID, records empty run-project audit and alerts; operator removes recovery controls and independent auditor closes |
 | Runner dies after create succeeds but before ID write | Discover exact run-labeled/deterministically named resource; record then delete; if lookup is ambiguous, halt as incomplete |
 | Scheduler invocation or Cloud Run execution fails | Retry boundedly, preserve run; next interval resumes from recorded state; notify failure without closing |
 | Duplicate/concurrent reaper execution | One CAS lease wins; stale generation cannot mutate/delete; idempotent delete tolerates already-absent owned resource |
-| Runner loses local Terraform state | Reaper cleans exact manifest-discovered resources without state; audit; retain/mark local state unavailable and require empty inventory before new run |
+| Runner loses local Terraform state | Reaper cleans exact manifest-discovered resources without reading state; owner restores state from the private versioned bucket/independent backup; retain the run as incomplete until restored state and inventory reconcile |
 | Terraform destroy partially fails | Preserve state and failures; retry exact dependencies; never remove finalizers or broad-delete project resources |
 | Required API/IAM permission missing | Fail preflight before first billable resource when possible; mid-run mark incomplete, notify, retain recovery path |
 | Wrong project, region, run ID, deadline, or unknown resource type | Reject before API mutation; tests prove no delete call |
@@ -329,26 +464,39 @@ CP-3. If they cannot, stop and get a concrete policy decision before activation.
 
 ## CP-1B implementation packet
 
-1. Add a versioned run-intent/manifest schema and deterministic validators for ID,
-   immutable source/image references, London scope, creation/deadline, expected
-   resource types, limits, cost/credit observations and required independent
-   cleanup identity. Validate malformed types, `NaN`/boolean numbers, stale or
-   overlong expiry, unknown resources and scope mismatch fail closed.
-2. Make Terraform resource names and labels run-scoped where supported; add
-   positive/negative renderer/plan contract checks. Keep shared project services,
-   WIF/budget/alert bootstrap and persistent recovery bucket explicitly outside
-   run deletion. No `apply` or cloud API access in this packet.
-3. Implement a pure provider-operation interface and testable cleanup planner
-   that accepts only exact manifest IDs and a fixed dependency order. Refuse
-   unknown types, duplicate IDs under multiple owners, mismatched project/region,
-   expired/invalid ledger generations and incomplete discovery. Produce a dry
-   run plan with the coverage gaps; no broad-delete fallback.
-4. Implement GCS generation-conditional manifest operations and a Cloud Run
-   reaper adapter only after the IAM/resource matrix is reviewed. Unit tests use
-   a fake API; integration tests in CP-1C use a bounded approved drill.
-5. Add lifecycle workflow only after reaper and cleanup path are deployed and
-   qualified. The workflow validates plan/source/identity before creating the
-   first billable object and must be cancellation-safe.
+File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
+
+1. `scripts/run_contract.py` and its fixtures/tests: split recovery project,
+   workload project and principals in the schema; model `control_bootstrapping`,
+   `prepared`, project/billing request phases, provisioning, ready, teardown,
+   audit and incomplete states; reject cross-project resource IDs, ambiguous
+   create/link results, wrong backup/state ownership and unauthorized project
+   transitions. `scripts/run_contract_cli.py` emits only exact-ID dry-run plans.
+2. `bootstrap/terraform/`: keep only existing-project/bootstrap-owned controls;
+   separate recovery-project APIs, ledger, state bucket defaults, Job/Scheduler,
+   provisioner and monitoring from the current lab project. Preserve and
+   reconcile the existing GBP budget instead of cloning it blindly.
+3. `infrastructure/lab/`: move run-only APIs, `configmanagement` Feature, node
+   service account/binding, VPC, GKE, Fleet membership and membership feature
+   into the disposable run project. Add an explicit run inventory for node pools,
+   service agents and provider-generated resources. Keep deletion protection on
+   by default; implement only reviewed normal teardown transitions.
+4. `bootstrap/terraform/backend.tf`, `infrastructure/lab/backend.tf`, and the
+   controller init path: replace local state with the selected private GCS
+   backend, create the per-run state bucket before `terraform init`, grant only
+   the Terraform identity access to that bucket, and verify backup/restore.
+   The reaper never reads state.
+5. New recovery-controller modules plus `scripts/run_contract.py` adapters:
+   create the create-only ledger record and all per-run recovery controls before
+   project creation; implement generation-CAS writes and exact-ID discovery;
+   separate reaper, project/billing, audit and control-reclamation roles. Use a
+   fake provider for loss-after-create, stale-generation, retry and cross-run
+   denial cases before any hosted credentials are added.
+6. `.github/workflows/validate.yaml` remains credential-free for CI and runs
+   schema, Terraform-render, cleanup, state, and negative-boundary checks. Add
+   lifecycle workflow only after the reaper and cleanup path are deployed and
+   qualified; validate source, state, identity, costs and budget notification
+   before any billable object, and make cancellation recoverable.
 
 **CP-1B completion gate:** positive and negative tests, hosted credential-free
 validation, exact allowed files and plan, documented API/role matrix, fake
