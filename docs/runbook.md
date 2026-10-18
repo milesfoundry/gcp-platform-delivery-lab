@@ -9,6 +9,14 @@ cases and next implementation packet. The run contract validator in
 deployed ledger, Cloud Run reaper, janitor, cleanup implementation or cloud
 qualification. No cloud resource creation is authorized by these files.
 
+The 2026-10-18 IAM review found that the current shared lab-project layout
+does not yet prove a reaper can delete its run's Compute network resources
+without gaining broader project-level access. The working design candidate is
+one disposable project per run, with the ledger and generic reaper in a
+separate persistent recovery project; this boundary is not implemented or
+approved for live activation. See the IAM finding in the safety design before
+changing Terraform or planning a cloud run.
+
 Use `python3 scripts/run_contract_cli.py intent|manifest|cleanup|controls
 <record.json>` to validate a local record or print an exact-ID dry-run plan.
 The CLI has no provider client or delete path; `controls` refuses to plan reaper
@@ -71,8 +79,10 @@ because validate passes. Required outstanding gates:
 3. Qualify the selected GKE/Config Sync versions and fleet RBAC behavior.
 4. Qualify the exact janitor IAM boundary. The current contract validator and
    dry-run cleanup planner reject malformed manifests and wrong run IDs; they do
-   not call Google APIs or prove cross-run IAM denial. No reaper may be enabled
-   until least-privilege permission and negative cross-run tests pass.
+   not call Google APIs or prove cross-run IAM denial. The single-project
+   layout has an unresolved Compute network scope gap. No reaper may be enabled
+   until the project boundary, least-privilege permissions and negative
+   cross-run tests pass.
 5. Implement the generation-conditional GCS ledger and out-of-band reaper; test
    runner-loss recovery and independent inventory with a fake API before a
    separately approved bounded cloud drill. Job-local Terraform state is not a

@@ -87,6 +87,48 @@ objects cannot be changed. If the required permission is project-wide, stop and
 revise the isolation model before CP-1C; exact IDs in application code are not an
 IAM boundary.
 
+#### Current permission-boundary finding (2026-10-18)
+
+Official IAM references distinguish API authorization from where a role can be
+bound and which resources expose condition attributes. GKE cluster deletion is
+authorized against the requested cluster, and GKE clusters expose
+`resource.name` for IAM Conditions. Compute subnetworks accept allow policies,
+but Compute VPC networks and Cloud Routers are not listed as resources that
+accept allow policies; the documented Compute `resource.name` list also does
+not include VPC networks, subnetworks, routers or Cloud NAT configuration.
+Consequently, the current single-project design cannot yet demonstrate an IAM
+deny boundary for every network resource using a run-name condition. A reaper
+grant at the lab-project level would be broader than the run manifest, even
+when its application code submits exact resource IDs.
+
+Do not implement a live reaper role or enable the scheduler under the current
+single-project layout. CP-1A must compare and qualify one of these boundaries:
+
+1. Put each run's billable resources in a disposable, run-dedicated project;
+   keep the ledger, scheduler and generic reaper in a separate persistent
+   recovery project. Grant cleanup permissions only on that run project, and
+   keep `resourcemanager.projects.setIamPolicy` and project deletion outside
+   the reaper role. Verify all APIs, Fleet/Config Sync operations, node
+   identities, billing alerts and inventory/audit flows work across this
+   boundary before changing Terraform.
+2. Retain one lab project only if an exact conditional-role or deny-policy
+   design is shown to cover every destructive and discovery permission for
+   network, subnet, router/NAT, GKE, Fleet membership and any future workload
+   resources, including negative cross-run tests. Labels and application-side
+   ID checks alone do not satisfy this option.
+
+The first option is the working design candidate, not an approved live change.
+It adds project provisioning and teardown to the immutable run manifest and
+requires updated cost, quota, budget-alert and failure-recovery analysis. The
+existing Terraform roots and contract still assume one dedicated lab project;
+they must not be treated as implementing per-run project isolation.
+
+Evidence references: [resource types that accept allow policies](https://docs.cloud.google.com/iam/docs/resource-types-with-policies),
+[IAM Condition resource attributes](https://docs.cloud.google.com/iam/docs/conditions-resource-attributes),
+[GKE API permissions](https://docs.cloud.google.com/kubernetes-engine/docs/reference/api-permissions),
+[Compute IAM roles and permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/compute),
+and [GKE IAM roles and permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/container).
+
 ## Durable run record and state machine
 
 Store one private JSON manifest per run in the GCS ledger bucket. Use Cloud

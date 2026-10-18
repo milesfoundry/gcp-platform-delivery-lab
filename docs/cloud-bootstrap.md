@@ -6,6 +6,13 @@ explicitly reviewed project roles and opt-in persistent GKE prerequisites. Terra
 or short-lived run workspace. This configuration is validated without credentials;
 activation waits for the chosen project, region, budget/lifetime and access setup.
 
+**Isolation status (2026-10-18):** this root still models bootstrap and the lab
+in one GCP project. The IAM review has not qualified that layout for an
+independent reaper. A disposable project per run, with persistent recovery
+controls in a separate project, is the current design candidate. Do not apply
+or extend this Terraform until that project boundary and its billing, Fleet,
+identity and recovery flows are designed and reviewed.
+
 ## Identity contract
 
 The provider accepts tokens for this repository's numeric repository/owner IDs,
@@ -39,8 +46,10 @@ Compute/GKE/Fleet/Config Sync/Storage/Pub/Sub API enablement, the persistent
 `portfolio-lab-nodes` service account and its one node role, and the shared
 project-wide Config Sync Fleet feature. Those API services are configured to
 remain enabled if a Terraform state entry is removed. Keep this flag enabled
-after bootstrap; lab runs must use its exact node service account. The lab root
-owns only run-scoped network/GKE membership/configuration resources. Both roots
+after bootstrap in the current single-project model; lab runs must use its
+exact node service account. This ownership split is not yet proven safe for an
+independent reaper. The lab root owns only run-scoped network/GKE
+membership/configuration resources in that model. Both roots
 use local state files under their own `.terraform/` directories. This avoids a
 persistent GCS backend, but means an
 independent provider-side run inventory/janitor is mandatory if the workflow
