@@ -178,6 +178,51 @@ programmatic budget-notification topics in a FinOps administration project.
 These are design capabilities, not proof that the current account has the
 required parent or billing permissions.
 
+### Candidate API permission and authority matrix
+
+This matrix names the API permissions implied by the candidate operations. It is
+not a role grant, Terraform implementation, or live authorization. Before CP-1A
+can exit, verify the lowest grantable resource for every permission, validate
+provider/API side effects in a non-billable test boundary, and define exact custom
+roles where predefined roles are too broad. The run cleanup identity is never
+allowed to create projects, link billing, change IAM, enable/disable APIs, manage
+budgets, or delete recovery controls.
+
+| Actor / phase | Required API operations and permissions to qualify | Binding / authority boundary | Explicit exclusions and unresolved checks |
+| --- | --- | --- | --- |
+| Project launcher — create disposable project | `resourcemanager.projects.create` | Approved parent folder/organization only | Project creation does not attach billing. Google initially grants the creator `roles/owner`; determine the approved way to remove or constrain that grant before any workload API or billable resource is enabled. |
+| Project launcher — attach billing | `billing.resourceAssociations.create` on the billing account and `resourcemanager.projects.createBillingAssignment` on the new project | Billing-account and project scopes, held by the account's separate billing operator | Verify the target billing account, billing state, and project ID before attachment. The reaper cannot link/unlink billing. |
+| Bootstrap controller — enable required APIs and create run controls | `serviceusage.services.enable/get/list`; `cloudscheduler.jobs.create/get/list/update/delete`; `iam.serviceAccounts.create/get/list/delete`; `iam.serviceAccounts.actAs` on the target invocation account; `run.jobs.setIamPolicy` on the matching recovery Job to grant its invoker; Scheduler's Google-managed service agent retains `roles/cloudscheduler.serviceAgent` so it can mint the request token | Disposable project for APIs, Scheduler job and invocation account; recovery Job IAM change is constrained to that Job | Do not grant `serviceusage.services.disable` to cleanup. Do not copy existing-project WIF, node identity, Config Sync singleton, budget, or shared controls into the per-run project without a new design. API enablement can create service agents; inventory those as provider-managed dependencies. Verify the service-agent grant and exact IAM write path; never grant the Scheduler service-agent role to the runtime account. |
+| Reaper — network discovery and cleanup | `compute.networks.get/list/delete`; `compute.subnetworks.get/list/delete`; `compute.routers.get/list/update/delete`. Removing Cloud NAT is a router update; NAT is router configuration, not an independently deleted router resource. | Project-level custom role in the one disposable run project; the project contains no shared recovery controls | No project IAM mutation, API disablement, route-wide or project-wide bulk delete. Confirm each permission's custom-role support and provider's actual calls. The isolated project is the cross-run boundary; name checks are an additional guard only. |
+| Reaper — GKE discovery and cleanup | `container.clusters.get/list/update/delete`; `container.operations.get/list`. `container.clusters.update` is needed for the reviewed deletion-protection transition and node-pool operations. | Same disposable run project | No `container.clusters.getCredentials` and no Kubernetes credentials; no cluster create, IAM grant, or unrelated GKE feature mutation. Verify list/discovery behavior and whether update permissions can be scoped more narrowly. |
+| Reaper — Fleet / Config Sync run membership | `gkehub.memberships.get/list/delete`; `gkehub.membershipfeatures.get/list/delete`; `gkehub.operations.get/list` if asynchronous operations require polling | Same disposable run project, after confirming the membership and membership-feature resources inherit the run project boundary | Never delete/update the project-wide `configmanagement` Feature or mutate Fleet/project IAM. Verify provider calls and resource-level grantability. |
+| Reaper runtime — read/update durable manifest | At minimum `storage.objects.get` and the write permissions required by the selected JSON API method. Replacing an existing object can require `storage.objects.create` plus `storage.objects.delete`; metadata updates use `storage.objects.update`. Use generation-match preconditions on every state transition. | Conditional binding to the exact `runs/{run_id}/manifest.json` object in the recovery bucket, with uniform bucket-level access | Never grant `storage.objects.list`, bucket administration, object IAM policy, or access to other run paths. Confirm CAS method permissions and retention/versioning semantics in fake and isolated integration tests; retain closed generations for audit. |
+| Scheduler execution identity — trigger its reaper | `run.jobs.run` via `roles/run.invoker` bound to only the matching per-run Cloud Run Job | Job resource in the recovery project; Scheduler job and its service account stay in the matching run project | No cleanup permissions and no invocation of any other reaper Job. Verify the Cloud Scheduler service-agent token-creation path, OAuth request, fixed request body, retries, and exact Job IAM binding end to end. |
+| Recovery-control provisioner — create per-run reaper | Cloud Run Job get/create/update/delete permissions (`run.jobs.get/create/update/delete`), `run.jobs.setIamPolicy` for only that Job, `iam.serviceAccounts.actAs` for its unique execution service account; Artifact Registry read on the reviewed image repository | Recovery project, Job resource, service account and image repository; separate short-lived provisioner authority | This control-plane identity is not the runtime identity. It must not be shared with the run cleanup identity or included in a run-project role. Verify exact image pull and Job create permissions using the selected deployment method. |
+| Cost operator — alerts and topic | `billing.budgets.create/get/list/update/delete` on the billing account; Pub/Sub topic create/get/publish policy operations in the recovery/FinOps project; required project/billing association reads | Billing account and recovery/FinOps project, operated outside both Scheduler and reaper identities | Alert-only budgets are not caps. Discover/import the existing GCP Lab budget and recipient before deciding whether to create per-run budgets. Validate delivery before the first billable resource. |
+| Independent auditor — verify absence and reconcile cost | Read-only `get/list` for Compute, GKE and GKE Hub resources in the run project; `resourcemanager.projects.get`; billing association and budget reads; optional Cloud Asset Inventory search | Separate human or read-only audit identity, independent of the reaper runtime and its state | Cloud Asset Inventory is supplementary and eventually consistent. Require service-specific absence checks and a separate reviewer before `closed`; auditor has no delete or IAM-write permission. |
+| Post-audit project/control reclamation | `resourcemanager.projects.delete` on the run project (or inherited through an approved parent policy), plus billing-association/budget cleanup and per-run recovery Job, service-account and Scheduler control deletion permissions | Separate named operator after independent empty-resource audit and delayed billing reconciliation | Never granted to the run reaper. Record exact project, budget, Job, service-account and Scheduler IDs in the closed manifest; wrong-run refusal must be tested. Decide whether to delete or retain the empty project and for how long. |
+
+Project-level cleanup is acceptable in this candidate only because each project
+is dedicated to one run and contains no recovery, billing, identity, or shared
+bootstrap resources. A project-level custom role is still powerful within that
+project: preflight must reject unowned resources, cleanup must use exact recorded
+IDs, and the independent auditor must report any resource outside the manifest
+as an incomplete teardown. Keep `resourcemanager.projects.setIamPolicy`,
+`resourcemanager.projects.delete`, `billing.resourceAssociations.*`,
+`billing.budgets.*`, `serviceusage.services.disable`, and recovery-project
+`run.jobs.delete` out of the runtime identity.
+
+Candidate teardown order is: stop application producers and preserve bounded
+evidence; delete the run Config Sync membership feature; delete the Fleet
+membership; delete the GKE cluster normally (which owns its node pool); remove
+Cloud NAT configuration from the router; delete the router; delete the subnet;
+delete the VPC; then independently get/list each recorded type until absent.
+Keep the Scheduler and manifest available until the independent audit passes.
+Only the separate post-audit operator may then remove the per-run budget,
+Scheduler, reaper Job/runtime identity and finally the empty run project after
+the delayed billing review.
+
 Evidence references: [resource types that accept allow policies](https://docs.cloud.google.com/iam/docs/resource-types-with-policies),
 [IAM Condition resource attributes](https://docs.cloud.google.com/iam/docs/conditions-resource-attributes),
 [GKE API permissions](https://docs.cloud.google.com/kubernetes-engine/docs/reference/api-permissions),
@@ -193,6 +238,16 @@ Project and billing references: [create projects](https://docs.cloud.google.com/
 [project IAM access control](https://docs.cloud.google.com/resource-manager/docs/access-control-proj),
 [project-filtered alerts-only budgets](https://docs.cloud.google.com/billing/docs/how-to/budget-api),
 and [programmatic budget notifications](https://docs.cloud.google.com/billing/docs/how-to/budgets-programmatic-notifications).
+Permission references: [Compute Engine IAM roles and permissions](https://docs.cloud.google.com/compute/docs/access/iam),
+[GKE API permissions](https://cloud.google.com/kubernetes-engine/docs/reference/api-permissions),
+[GKE Hub roles and permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/gkehub),
+[Cloud Run IAM permissions](https://docs.cloud.google.com/run/docs/reference/iam/permissions),
+[Cloud Scheduler roles and permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/cloudscheduler),
+[Cloud Scheduler authenticated HTTP targets](https://docs.cloud.google.com/scheduler/docs/http-target-auth),
+[Service Usage roles and permissions](https://docs.cloud.google.com/iam/docs/roles-permissions/serviceusage),
+[Cloud Storage IAM permissions](https://docs.cloud.google.com/storage/docs/access-control/iam-permissions),
+[project IAM permissions](https://docs.cloud.google.com/resource-manager/docs/access-control-proj),
+and [Cloud Billing budget permissions](https://docs.cloud.google.com/billing/docs/how-to/custom-roles).
 
 ## Durable run record and state machine
 
