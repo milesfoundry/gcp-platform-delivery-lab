@@ -4,9 +4,6 @@ output "workload_identity_provider" {
 output "ci_service_account" {
   value = google_service_account.ci.email
 }
-output "lab_node_service_account" {
-  value = try(google_service_account.lab_nodes[0].email, null)
-}
 output "state_contract" {
   value = {
     backend           = "local"

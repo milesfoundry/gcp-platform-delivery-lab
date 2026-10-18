@@ -21,10 +21,11 @@ RUN_ID = "lab-20261018-a1b2"
 
 def intent():
     return {
-        "schema": "portfolio.gcp-run.v1",
+        "schema": "portfolio.gcp-run.v2",
         "run_id": RUN_ID,
         "scope": {
             "project_id": PROJECT,
+            "recovery_project_id": "recovery-lab-456",
             "region": "europe-west2",
             "zones": [
                 "europe-west2-a",
@@ -49,12 +50,18 @@ def intent():
             "alerts_verified": True,
         },
         "cleanup": {
-            "service_account": "janitor@sample-lab-123.iam.gserviceaccount.com",
+            "service_account": "lab-20261018-a1b2-reaper@recovery-lab-456.iam.gserviceaccount.com",
             "identity_verified": True,
             "independent_recovery_verified": True,
         },
-        "state": "prepared",
+        "state": "control_bootstrapping",
         "resources": [],
+        "controls": [
+            {"type": "gcp.run.job", "id": "projects/recovery-lab-456/locations/europe-west2/jobs/lab-20261018-a1b2-reaper", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+            {"type": "gcp.scheduler.job", "id": "projects/recovery-lab-456/locations/europe-west2/jobs/lab-20261018-a1b2-expiry", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+            {"type": "gcp.iam.service_account", "id": "projects/recovery-lab-456/serviceAccounts/lab-20261018-a1b2-reaper@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+            {"type": "gcp.iam.service_account", "id": "projects/recovery-lab-456/serviceAccounts/lab-20261018-a1b2-scheduler@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+        ],
     }
 
 
@@ -70,7 +77,7 @@ def resource(resource_type, name, *, proof="run_name", status="present"):
 
 class RunIntentTests(unittest.TestCase):
     def test_approved_london_three_zone_intent_passes(self):
-        self.assertEqual(validate_intent(intent(), now=NOW)["state"], "prepared")
+        self.assertEqual(validate_intent(intent(), now=NOW)["state"], "control_bootstrapping")
 
     def test_credit_balance_can_be_zero_with_verified_runway_review(self):
         candidate = intent()
@@ -144,13 +151,36 @@ class RunIntentTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
 
-    def test_new_intent_cannot_predeclare_resources_or_skip_prepared(self):
+    def test_recovery_controls_fail_closed_for_wrong_location_or_malformed_status(self):
         candidate = intent()
-        candidate["state"] = "provisioning"
+        candidate["controls"][0]["id"] = candidate["controls"][0]["id"].replace(
+            "europe-west2", "us-central1"
+        )
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
+        candidate = intent()
+        candidate["controls"][0]["status"] = {"unexpected": "object"}
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
+
+    def test_new_intent_cannot_predeclare_resources_or_skip_control_bootstrap(self):
+        candidate = intent()
+        candidate["state"] = "prepared"
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
         candidate = intent()
         candidate["resources"] = [resource("gcp.gke.cluster", RUN_ID)]
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
+        candidate = intent()
+        candidate["controls"] = candidate["controls"][:-1]
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
+        candidate = intent()
+        candidate["controls"][0]["id"] = (
+            "projects/other-project/locations/europe-west2/jobs/"
+            + RUN_ID + "-reaper"
+        )
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
 
@@ -166,11 +196,52 @@ class ManifestTests(unittest.TestCase):
             resource("gcp.gke.node_pool", RUN_ID + "-cluster/nodePools/default"),
             resource("gcp.gkehub.membership", RUN_ID + "-membership"),
             resource("gcp.gkehub.feature_membership", RUN_ID + "-config"),
+            {
+                "type": "gcp.gkehub.feature",
+                "id": f"projects/{PROJECT}/locations/global/features/configmanagement",
+                "ownership_proof": "run_project",
+                "status": "present",
+                "delete_attempts": 0,
+            },
         ]
         return candidate
 
     def test_manifest_accepts_run_scoped_resource_inventory(self):
         self.assertEqual(validate_manifest(self.manifest())["state"], "cleaning")
+
+    def test_reaper_identity_is_recovery_project_scoped(self):
+        candidate = self.manifest()
+        candidate["cleanup"]["service_account"] = (
+            f"janitor@{PROJECT}.iam.gserviceaccount.com"
+        )
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
+
+    def test_persisted_manifest_cannot_switch_to_another_recovery_identity(self):
+        candidate = self.manifest()
+        candidate["cleanup"]["service_account"] = (
+            "other@recovery-lab-456.iam.gserviceaccount.com"
+        )
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
+
+    def test_reaper_identity_must_match_predeclared_control_account(self):
+        candidate = intent()
+        candidate["cleanup"]["service_account"] = (
+            "other@recovery-lab-456.iam.gserviceaccount.com"
+        )
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
+
+    def test_prepared_requires_all_recovery_controls_verified(self):
+        candidate = self.manifest()
+        candidate["state"] = "prepared"
+        candidate["resources"] = []
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
+        for control in candidate["controls"]:
+            control["status"] = "present"
+        self.assertEqual(validate_manifest(candidate)["state"], "prepared")
 
     def test_unknown_persistent_or_project_wide_resource_is_rejected(self):
         for candidate_type in (
@@ -219,6 +290,16 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_manifest(candidate)
 
+    def test_malformed_manifest_state_and_audit_result_fail_closed(self):
+        candidate = self.manifest()
+        candidate["state"] = ["cleaning"]
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
+        candidate = self.manifest()
+        candidate["independent_audit"] = {"result": [], "complete": True}
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
+
     def test_unknown_ownership_or_delete_attempt_count_fails(self):
         candidate = self.manifest()
         candidate["resources"][0]["ownership_proof"] = "project_search"
@@ -233,10 +314,11 @@ class ManifestTests(unittest.TestCase):
         result = cleanup_plan(self.manifest())
         ranks = [
             {
-                "gcp.gkehub.feature_membership": 170,
-                "gcp.gkehub.membership": 160,
-                "gcp.gke.node_pool": 150,
-                "gcp.gke.cluster": 140,
+                "gcp.gkehub.feature_membership": 190,
+                "gcp.gkehub.membership": 180,
+                "gcp.gkehub.feature": 170,
+                "gcp.gke.node_pool": 160,
+                "gcp.gke.cluster": 150,
                 "gcp.compute.router_nat": 110,
                 "gcp.compute.network": 80,
             }[item["type"]]
@@ -259,11 +341,25 @@ class ManifestTests(unittest.TestCase):
         candidate["state"] = "closed"
         for item in candidate["resources"]:
             item["status"] = "deleted"
-        candidate["independent_audit"] = {"result": "passed", "complete": True}
+        for item in candidate["controls"]:
+            item["status"] = "deleted"
+        candidate["independent_audit"] = {
+            "result": "passed", "complete": True, "resources_absent": True,
+            "project_absent": True, "billing_unlinked": True,
+            "budget_reconciled": True, "recovery_controls_absent": True,
+        }
         self.assertEqual(validate_manifest(candidate)["state"], "closed")
         for audit in (
-            {"result": "passed", "complete": False},
-            {"result": "incomplete", "complete": True},
+            {
+                "result": "passed", "complete": False, "resources_absent": True,
+                "project_absent": True, "billing_unlinked": True,
+                "budget_reconciled": True, "recovery_controls_absent": True,
+            },
+            {
+                "result": "incomplete", "complete": True, "resources_absent": True,
+                "project_absent": True, "billing_unlinked": True,
+                "budget_reconciled": True, "recovery_controls_absent": True,
+            },
         ):
             candidate["independent_audit"] = audit
             with self.subTest(audit=audit), self.assertRaises(ContractError):
@@ -283,20 +379,26 @@ class ManifestTests(unittest.TestCase):
         )
         with self.assertRaises(ContractError):
             cleanup_plan(candidate)
-        candidate["resources"].pop()
+        candidate = self.manifest()
         plan = cleanup_plan(candidate)
         self.assertNotIn("gcp.scheduler.job", [item["type"] for item in plan])
-        candidate["state"] = "auditing"
+        candidate["state"] = "controls_reclaiming"
         with self.assertRaises(ContractError):
             control_cleanup_plan(candidate)
         for item in candidate["resources"]:
-            if item["type"] not in {"gcp.scheduler.job", "gcp.run.job"}:
-                item["status"] = "deleted"
-        candidate["independent_audit"] = {"result": "passed", "complete": True}
+            item["status"] = "deleted"
+        candidate["independent_audit"] = {
+            "result": "passed", "complete": True, "resources_absent": True,
+        }
         controls = control_cleanup_plan(candidate)
         self.assertEqual(
             [item["type"] for item in controls],
-            ["gcp.scheduler.job"],
+            [
+                "gcp.scheduler.job",
+                "gcp.run.job",
+                "gcp.iam.service_account",
+                "gcp.iam.service_account",
+            ],
         )
         candidate["resources"].append(
             resource("gcp.storage.bucket", RUN_ID + "-ledger")
@@ -304,9 +406,16 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             cleanup_plan(candidate)
 
-    def test_state_transitions_are_monotonic_except_explicit_recovery(self):
-        self.assertEqual(next_state("prepared", "provisioning"), "provisioning")
+    def test_state_transitions_follow_project_and_reclamation_phases(self):
+        self.assertEqual(
+            next_state("prepared", "project_create_requested"),
+            "project_create_requested",
+        )
         self.assertEqual(next_state("incomplete", "cleaning"), "cleaning")
+        self.assertEqual(
+            next_state("auditing", "controls_reclaiming"),
+            "controls_reclaiming",
+        )
         with self.assertRaises(ContractError):
             next_state("closed", "cleaning")
         with self.assertRaises(ContractError):

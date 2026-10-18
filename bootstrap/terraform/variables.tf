@@ -1,5 +1,5 @@
 variable "project_id" {
-  description = "Approved dedicated existing lab project."
+  description = "Persistent bootstrap/recovery project; disposable run projects are managed separately."
   type        = string
 }
 variable "region" {
@@ -14,12 +14,6 @@ variable "approved_project_roles" {
     condition     = alltrue([for role in var.approved_project_roles : startswith(role, "roles/") && !contains(["roles/owner", "roles/editor"], role)])
     error_message = "Use explicitly reviewed predefined roles; Owner and Editor are forbidden."
   }
-}
-
-variable "enable_lab_prerequisites" {
-  description = "Manage persistent project APIs, lab node identity and shared Config Sync feature. Keep enabled after creation."
-  type        = bool
-  default     = false
 }
 
 variable "enable_cost_alerts" {

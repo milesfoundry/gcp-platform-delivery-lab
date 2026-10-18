@@ -81,23 +81,10 @@ run "broad_editor_role_is_rejected" {
   expect_failures = [var.approved_project_roles]
 }
 
-run "lab_prerequisites_are_persistent_and_explicit" {
+run "bootstrap_does_not_own_run_project_resources" {
   command = plan
-  variables { enable_lab_prerequisites = true }
   assert {
-    condition     = google_service_account.lab_nodes[0].account_id == "portfolio-lab-nodes"
-    error_message = "The least-privilege node service account is bootstrap-owned and shared across runs."
-  }
-  assert {
-    condition     = google_project_iam_member.lab_node_service[0].role == "roles/container.defaultNodeServiceAccount"
-    error_message = "Only the standard GKE node service role is granted to the persistent node identity."
-  }
-  assert {
-    condition     = google_gke_hub_feature.config_sync[0].name == "configmanagement"
-    error_message = "The project-wide Config Sync feature is bootstrap-owned, never run-owned."
-  }
-  assert {
-    condition     = alltrue([for service in google_project_service.bootstrap : service.disable_on_destroy == false])
-    error_message = "Shared APIs must remain enabled when bootstrap or lab run state is removed."
+    condition     = alltrue([for service in google_project_service.bootstrap : !contains(["compute.googleapis.com", "container.googleapis.com", "gkehub.googleapis.com", "anthosconfigmanagement.googleapis.com", "gkeconnect.googleapis.com", "storage.googleapis.com", "pubsub.googleapis.com"], service.service)])
+    error_message = "GKE, networking, Config Sync and workload APIs belong to the disposable run project."
   }
 }

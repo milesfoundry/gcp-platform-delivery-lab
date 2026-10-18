@@ -37,9 +37,9 @@ procedure have ongoing cost. Measure and alert on them, and assign their owner,
 retention, private backup, and eventual project-close procedure.
 
 Recovery bootstrap must be registered before its first create. Write a
-create-only `provisioning` manifest with deterministic expected Job, service
-account, Scheduler, project and budget identifiers before creating any run
-control. Record each control create request and response. If the runner is lost
+create-only `control_bootstrapping` manifest with deterministic expected Job,
+service-account, Scheduler, project and budget identifiers before creating any
+run control. Record each control create request and response. If the runner is lost
 before the reaper Job and Scheduler are both verified, no disposable project or
 billable workload resource may be created; the recovery-project operator resumes
 or removes the partial controls using the manifest and audit APIs. Only after
@@ -116,13 +116,13 @@ Inventory supplements these checks because it can lag.
 
 | Resource / current owner | Run identity and recovery lookup | Ordered cleanup and independent audit | Cost / retention |
 | --- | --- | --- | --- |
-| Run API enablements — currently `google_project_service.bootstrap` in bootstrap Terraform | New run project ID plus exact service name; only enable after expiry controls are verified; service agents created as side effects are derived run assets | Keep enabled during cleanup; disable only after workload audit and before project reclamation if needed; independently list service agents and APIs | API enablement usually has no direct charge; service-agent resources and enabled services may have downstream costs |
+| Run API enablements — `google_project_service.lab` in the lab Terraform root | New run project ID plus exact service name; only enable after expiry controls are verified; service agents created as side effects are derived run assets | Keep enabled during cleanup; disable only after workload audit and before project reclamation if needed; independently list service agents and APIs | API enablement usually has no direct charge; service-agent resources and enabled services may have downstream costs |
 | VPC — lab Terraform root | Add `lab_run_id` label if the provider/API supports it; otherwise unique VPC name; exact project/network self-link | Delete after subnet, router/NAT and cluster dependencies; verify exact VPC absent | Project resource, run lifetime |
 | Subnet and secondary ranges — lab root | Run-specific name and VPC URI; confirm tag support | Delete after cluster and router/NAT; audit exact self-link | Project resource, run lifetime |
 | Router and Cloud NAT — lab root | Run-specific names and router/subnetwork URIs; confirm tag support | Delete NAT, then router, after cluster; audit NAT config and router absence | Billable while present; include setup/deletion interval |
 | GKE cluster and zonal node pool — lab root | Cluster resource labels include run ID; unique cluster/name; record exact cluster ID, each node-pool ID and all zones | Drain/stop application producers, export bounded evidence, remove run Config Sync membership/config in reviewed dependency order, delete each node pool then delete cluster normally with deletion protection explicitly disabled for teardown; audit cluster, pools and every node instance absent | Main billable resource; deadline begins before first billable bootstrap resource |
-| Fleet membership, Config Sync membership feature and `configmanagement` Feature — currently lab and bootstrap roots | All are per-run in the disposable project; exact project/location/name and membership IDs go in the manifest. The Fleet Feature is a project-scoped singleton, but is not shared across disposable projects | Remove Config Sync membership feature, then Fleet membership, then the now-unused per-run Feature; independently verify each exact ID absent before deleting the cluster/network | Config Sync/service charges and API use are run costs; confirm billing treatment and deletion semantics |
-| Node service account and project role — currently bootstrap root | Create one run-specific node identity in that run's project with only `roles/container.defaultNodeServiceAccount`; record service-account email and IAM binding as run-owned | Do not let the reaper change IAM. Remove through separately authorized project reclamation after GKE is absent; project deletion is the final authority boundary | No application cloud permissions; role binding is project scoped and disappears with the project |
+| Fleet membership, Config Sync membership feature and `configmanagement` Feature — lab Terraform root | All are per-run in the disposable project; exact project/location/name and membership IDs go in the manifest. The Fleet Feature is a project-scoped singleton, but is not shared across disposable projects | Remove Config Sync membership feature, then Fleet membership, then the now-unused per-run Feature; independently verify each exact ID absent before deleting the cluster/network | Config Sync/service charges and API use are run costs; confirm billing treatment and deletion semantics |
+| Node service account and project role — lab Terraform root | Create one run-specific node identity in that run's project with only `roles/container.defaultNodeServiceAccount`; record service-account email and IAM binding as run-owned | Do not let the reaper change IAM. Remove through separately authorized project reclamation after GKE is absent; project deletion is the final authority boundary | No application cloud permissions; role binding is project scoped and disappears with the project |
 | Future Pub/Sub topics/subscriptions and GCS report objects — CP-2 workload Terraform | Every topic/subscription/object carries run ID or lives under a dedicated run prefix; store exact full resource URI/object generation | Stop publishers, drain/delete subscriptions and queues; export evidence; delete only run-owned object generations after evidence verification; audit queues and versions absent | Include retained versions/egress/operations; evidence copies are separately allowlisted |
 | Bootstrap WIF pool/provider, CI service account, IAM grants — bootstrap root | Explicit bootstrap owner record, not a run ID | Keep through active run and audit; remove only in reviewed bootstrap/project-close sequence after run inventory is empty | Retained exception until explicit removal; protect from janitor |
 | Existing project billing budget and Monitoring channel/policies — bootstrap/account owner | Existing verified object IDs; import/reconcile before managing, never create competing objects blindly | Keep alerting through teardown and delayed billing review; remove only through explicit account closeout | Budget is a warning, not a cap; recipient config/state remain private |
@@ -144,21 +144,24 @@ No address in this table means that a cloud object exists or has been applied.
 | `google_compute_network.lab`, `google_compute_subnetwork.lab`, `google_compute_router.lab`, `google_compute_router_nat.lab` — `infrastructure/lab/main.tf` | VPC, subnet with pod/service ranges, Cloud Router and NAT | Per-run lab root in disposable project; record full IDs, router NAT config, dependencies and generated addresses; cleanup by exact IDs |
 | `google_container_cluster.lab`, `google_container_node_pool.lab` — `infrastructure/lab/main.tf` | Regional GKE cluster with three zonal nodes and managed pool | Per-run lab root; record cluster ID, node-pool ID, zones and deletion-protection state. Managed VMs/disks and control-plane services are derived assets and must be audited |
 | `google_gke_hub_membership.lab`, `google_gke_hub_feature_membership.config_sync` — `infrastructure/lab/main.tf` | Registers cluster and applies Config Sync configuration | Per-run lab root; exact membership and feature-membership IDs; remove configuration before membership and cluster |
-| `google_project_service.bootstrap[*]` — `bootstrap/terraform/main.tf` | Enables IAM, STS, Resource Manager, Billing Budgets, Monitoring, Logging and optional lab APIs in the existing project | Split: recovery/control-plane APIs stay in recovery project; Compute, GKE, GKE Hub, Config Management, Connect, Storage and Pub/Sub workload APIs are enabled in the disposable project only after its recovery trigger is verified. Record API names and service-agent side effects |
-| `google_service_account.lab_nodes[0]`, `google_project_iam_member.lab_node_service[0]` — bootstrap root | Shared node SA and project-level default node role | Replace with one run-specific service account and binding in disposable project; record both. Reaper cannot change IAM; separate project reclamation handles them |
-| `google_gke_hub_feature.config_sync[0]` — bootstrap root | `configmanagement` Feature in current project | Create one Feature per disposable project as prerequisite to its membership feature; include `gkehub.features.get/create/delete` and operation polling in qualification |
+| `google_project_service.bootstrap[*]` — `bootstrap/terraform/main.tf` | Enables IAM, STS, Resource Manager, Billing Budgets, Monitoring and Logging in the persistent bootstrap/recovery project | Remains control-plane owned. It no longer enables workload APIs in a run project |
+| `google_project_service.lab[*]` — `infrastructure/lab/main.tf` | Enables Compute, GKE, GKE Hub, Config Management, Connect, IAM, Service Usage, Logging, Monitoring, Storage and Pub/Sub in the run project | Per-run project resources; enable only after recovery controls, project creation, billing and budget checks pass. Record service names and generated service-agent side effects; reaper never disables APIs |
+| `google_service_account.lab_nodes`, `google_project_iam_member.lab_node_service` — `infrastructure/lab/main.tf` | Run-specific node SA and project-level default node role | Created in each disposable project; reaper cannot change IAM. Record separately under project-reclamation ownership; final project deletion removes them |
+| `google_gke_hub_feature.config_sync` — `infrastructure/lab/main.tf` | `configmanagement` Feature in the run project | Per-run Fleet Feature prerequisite to membership feature; manifest cleanup permission includes `gkehub.features.get/delete`; creation belongs to run provisioner. |
+
 | `google_service_account.ci`, `google_iam_workload_identity_pool.github`, `google_iam_workload_identity_pool_provider.github`, `google_service_account_iam_member.federation`, `google_project_iam_member.approved_apply_roles[*]` — bootstrap root | GitHub OIDC federation and current project apply grants | Keep under separate provisioner/control-plane ownership. The project creator/billing linker is separate authority; its exact parent and billing scope, initial project Owner grant handling and short-lived credential path remain unresolved |
 | `google_monitoring_notification_channel.cost_email["enabled"]`, `google_billing_budget.cost_alerts["enabled"]`, `google_monitoring_alert_policy.lifecycle_events[*]` — bootstrap root | Existing project email channel, GBP alert budget and six log alert policies | Reconcile the verified existing project budget; per-run project alert budgets and delivery route are created by cost operator, not the reaper. Preserve evidence of tested recipient delivery and delayed cost reconciliation |
 | `gitops/platform/{namespace,quota,network-policy,role,role-binding,root}` and `gitops/apps/report/{repo-sync,config-map}` | In-cluster objects reconciled by Config Sync | Per-run cluster contents. Record source revision and root inventory; preserve bounded evidence, then remove through Config Sync and cluster teardown |
 
-The current bootstrap root therefore mixes persistent identities, account-level
-budgeting, project APIs, node identity and the Config Sync Feature. It must be
-split before implementation: recovery/control-plane Terraform owns the ledger,
-state bucket, reaper image/Jobs/Schedulers and provisioner controls; the run
-root owns run APIs, network, GKE, Fleet membership/Feature and node identity;
-the project launcher and cost operator own project creation, billing attachment
-and project-filtered budgets. Keep source roots and state prefixes separate so
-`terraform destroy` cannot cross these owner boundaries.
+The bootstrap and lab roots now separate persistent controls from run-owned
+resources in source. Recovery/control-plane Terraform still needs to own the
+ledger, per-run state buckets, reaper image/Jobs/Schedulers and provisioner
+controls; the lab root owns run APIs, network, GKE, Fleet membership/Feature and
+node identity; the project launcher and cost operator own project creation,
+billing attachment and project-filtered budgets. Keep source roots and state
+owners separate so `terraform destroy` cannot cross these boundaries. These
+Terraform changes have not been applied; existing state and provider-call
+qualification remain gates.
 
 The exact provider permission set for the reaper is a CP-1B exit check. Derive
 permissions from the API operations above and test denied operations. Do not use
@@ -257,8 +260,8 @@ access, but cannot scope `storage.objects.list` to a prefix; the reaper must use
 the manifest's exact object name and must not list the bucket. Do not treat this
 table as an IAM role definition or a cloud-ready plan.
 
-The current bootstrap Terraform budget/channel are attached to the existing
-single lab project and do not implement the per-run budget row above. Reconcile
+The current bootstrap Terraform budget/channel remain attached to its
+configured project and do not implement the per-run budget row above. Reconcile
 the existing alert configuration and its billing-account owner before designing
 the per-run budget lifecycle; do not create a duplicate budget or claim that the
 existing Terraform supports disposable projects.
@@ -388,13 +391,20 @@ Required manifest fields:
 - Exact Terraform source revision, image digest, plan checksum, Config Sync/image
   tool versions and reviewed intent checksum.
 - State, state generation, lease owner/expiry, last heartbeat and monotonic event
-  sequence. Model control bootstrap, prepared/armed, project-create requested,
-  project-created, billing-link requested, project-linked, API enablement,
-  workload provisioning, ready, teardown requested, cleaning, auditing, closed
-  and incomplete as explicit states or monotonic phases. A create/link request is
-  persisted before calling GCP so a lost response is discoverable by exact ID.
-  The reaper must never guess whether a project was created or billed; ambiguous
-  outcome becomes `incomplete` and invokes the project/billing operator path.
+  sequence. Schema v2 starts at `control_bootstrapping`, then records `prepared`,
+  `project_create_requested`, `project_created`, `billing_link_requested`,
+  `project_linked`, `api_enablement`, `provisioning`, `ready`,
+  `teardown_requested`, `cleaning`, `auditing`, `controls_reclaiming`, `closed`
+  or `incomplete`. Create/link requests are persisted before calling GCP so lost
+  responses can be reconciled by exact ID. The reaper never guesses whether a
+  project was created or billed; ambiguity becomes `incomplete` and invokes the
+  project/billing operator path.
+- `controls`: expected per-run reaper Job, Scheduler job, execution service
+  account and invocation service account, each with exact recovery-project ID,
+  deterministic name and status (`expected`, `present`, `deleted`). These are
+  separate from run-project `resources`; the reaper cleanup plan cannot delete
+  them. New intent starts with these controls predeclared and no workload IDs.
+  `prepared` requires all controls verified present and no workload resources.
 - Per-resource expected type, canonical provider URI, discovery key, dependency
   edges, ownership evidence, first-seen/last-seen time, delete attempts/results,
   and independent audit result. Never store bearer credentials or sensitive
@@ -420,19 +430,20 @@ run-project audit and alerts the operator; the record remains open until that
 operator removes the scheduled trigger, Job and identities and the independent
 auditor records their absence. For a lost create/link response, the Job performs
 read-only exact-ID reconciliation; if billing or project state is ambiguous, it
-marks `incomplete` and alerts the separately authorized operator. No workload API is
-enabled until project creation, billing, budget ownership and expiry control
-are verified. Record each request before the provider call and response after
+marks `incomplete` and alerts the separately authorized operator. No workload API is enabled until project creation, billing, budget ownership
+and expiry control are verified. Record each request before the provider call and response after
 it. Never reset the deadline or extend expiry in place; a new attempt gets a new
 run ID and separately reviewed budget.
 
 The reaper acquires a short manifest lease using generation preconditions, reads
 the immutable project/region/ID scope, and ignores closed runs. At deadline it
 atomically moves any project-created or workload state to `teardown_requested`,
-performs the
-documented reverse-dependency cleanup, records each response, and re-lists exact
-resource types until absence is independently established. `closed` requires a
-complete audit plus no billable run resources. Any permission error, ambiguous
+performs the documented reverse-dependency cleanup, records each response, and
+re-lists exact resource types until absence is independently established. The
+separate operator then reconciles the billing budget, removes the recovery
+controls, unlinks billing and deletes the empty run project after delayed billing
+review. `closed` requires a complete independent audit of resources, project,
+billing, budget and recovery controls. Any permission error, ambiguous
 resource, unknown type, transient failure past the bounded retry window, or
 resource still present becomes `incomplete`; the scheduler keeps retrying and
 raises `teardown-failed`. Human recovery can take a manifest lease only by CAS;
@@ -466,19 +477,21 @@ CP-3. If they cannot, stop and get a concrete policy decision before activation.
 
 File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
 
-1. `scripts/run_contract.py` and its fixtures/tests: split recovery project,
-   workload project and principals in the schema; model `control_bootstrapping`,
-   `prepared`, project/billing request phases, provisioning, ready, teardown,
-   audit and incomplete states; reject cross-project resource IDs, ambiguous
-   create/link results, wrong backup/state ownership and unauthorized project
-   transitions. `scripts/run_contract_cli.py` emits only exact-ID dry-run plans.
-2. `bootstrap/terraform/`: keep only existing-project/bootstrap-owned controls;
-   separate recovery-project APIs, ledger, state bucket defaults, Job/Scheduler,
-   provisioner and monitoring from the current lab project. Preserve and
-   reconcile the existing GBP budget instead of cloning it blindly.
-3. `infrastructure/lab/`: move run-only APIs, `configmanagement` Feature, node
-   service account/binding, VPC, GKE, Fleet membership and membership feature
-   into the disposable run project. Add an explicit run inventory for node pools,
+1. `scripts/run_contract.py` and its fixtures/tests: schema v2 now separates
+   recovery/workload projects and reaper identities, predeclares the per-run
+   controls, models project/billing phases and audits controls separately from
+   workload IDs. It still needs exact state-backup identifiers and restore-proof
+   fields. Reject cross-project IDs, ambiguous create/link results and
+   unauthorized project transitions. `scripts/run_contract_cli.py` emits only
+   exact-ID dry-run plans.
+2. `bootstrap/terraform/`: now owns only persistent bootstrap-project APIs,
+   GitHub federation, cost-alert scaffolding and lifecycle alert policies; it
+   no longer owns run APIs, node identity or the Config Sync Feature. Still
+   separate the existing GBP budget/channel from the new recovery-project
+   controls and reconcile ownership before any apply.
+3. `infrastructure/lab/`: now owns run-only APIs, `configmanagement` Feature,
+   node service account/binding, VPC, GKE, Fleet membership and membership
+   feature in the disposable run project. Add an explicit run inventory for node pools,
    service agents and provider-generated resources. Keep deletion protection on
    by default; implement only reviewed normal teardown transitions.
 4. `bootstrap/terraform/backend.tf`, `infrastructure/lab/backend.tf`, and the

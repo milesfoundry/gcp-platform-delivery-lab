@@ -1,17 +1,18 @@
 # GCP state and federated CI bootstrap
 
-The bootstrap Terraform root is separate from the disposable lab root. It declares
-GitHub federation, a CI service account, project budget/lifecycle alerts,
-explicitly reviewed project roles and opt-in persistent GKE prerequisites. Terraform state is local to a trusted operator
-or short-lived run workspace. This configuration is validated without credentials;
-activation waits for the chosen project, region, budget/lifetime and access setup.
+The bootstrap Terraform root owns the persistent bootstrap/recovery project's
+GitHub federation, CI service account, reviewed project roles and cost/lifecycle
+alert scaffolding. The lab root owns each disposable run project's APIs, network,
+GKE, Config Sync Feature and run-specific node identity. Both backends are still
+local. CI validates these sources without credentials and never reads or applies
+live state.
 
-**Isolation status (2026-10-18):** this root still models bootstrap and the lab
-in one GCP project. The IAM review has not qualified that layout for an
-independent reaper. A disposable project per run, with persistent recovery
-controls in a separate project, is the current design candidate. Do not apply
-or extend this Terraform until that project boundary and its billing, Fleet,
-identity and recovery flows are designed and reviewed.
+**Isolation status (2026-10-18):** the Terraform resource ownership split now
+matches the one-project-per-run candidate, but project creation/billing,
+recovery Jobs/Schedulers, durable ledger, remote state/backup, per-run budgets
+and independent cleanup are not implemented. The current sources do not authorize
+an apply. No state migration is required: both configured backend state files
+were checked and contain zero managed resources.
 
 ## Identity contract
 
@@ -40,22 +41,26 @@ References:
 
 ## State ownership
 
-Bootstrap owns IAM/federation/budget/alert APIs, including the shared Logging and
-Monitoring API enablement. When `enable_lab_prerequisites=true`, it also owns the
-Compute/GKE/Fleet/Config Sync/Storage/Pub/Sub API enablement, the persistent
-`portfolio-lab-nodes` service account and its one node role, and the shared
-project-wide Config Sync Fleet feature. Those API services are configured to
-remain enabled if a Terraform state entry is removed. Keep this flag enabled
-after bootstrap in the current single-project model; lab runs must use its
-exact node service account. This ownership split is not yet proven safe for an
-independent reaper. The lab root owns only run-scoped network/GKE
-membership/configuration resources in that model. Both roots
-use local state files under their own `.terraform/` directories. This avoids a
-persistent GCS backend, but means an
-independent provider-side run inventory/janitor is mandatory if the workflow
-runner disappears. Never upload either root's state as an Actions artifact/cache.
-Preserve state until independent provider inventory confirms deletion; then remove
-the local workspace/state.
+Bootstrap owns GitHub federation, its CI identity and reviewed role grants,
+plus the existing project's budget/email/lifecycle alert resources and their IAM,
+STS, Resource Manager, Billing Budgets, Monitoring and Logging APIs. The existing
+project-filtered GBP budget remains attached to the configured bootstrap project;
+it does not automatically cover disposable run projects.
+
+The lab root owns Compute, GKE, GKE Hub, Config Management, Connect, IAM,
+IAM Credentials, Resource Manager, Service Usage, Logging, Monitoring, Storage
+and Pub/Sub API enablement in the run project. It creates one run-specific node
+service account with only `roles/container.defaultNodeServiceAccount`, the
+project-scoped `configmanagement` Feature, network, cluster, node pool and Fleet
+membership resources. These API services stay enabled until separate project
+reclamation. The reaper cannot change project IAM or delete the project-owned
+node identity; an authorized project owner reclaims them after audit.
+
+Both roots use local state paths under `.terraform/`. This is not runner-loss
+recovery. The candidate remote state bucket, separate private backup, durable
+manifest and independent janitor are still absent. Never upload either root's
+state as an Actions artifact/cache. Preserve state until independent inventory
+and billing audit pass; then retain it under the future state-retention policy.
 
 The lab root's local backend path is `.terraform/ephemeral-lab.tfstate`; the
 bootstrap root uses `.terraform/ephemeral-bootstrap.tfstate`. Credential-free CI
@@ -73,15 +78,17 @@ Once cloud settings are approved and access is verified:
    current account baseline and remaining credit runway. The threshold is not a
    spending cap. Keep the five actual and two forecast thresholds.
    Budget/email inputs and Terraform state must stay private.
-3. Create the reviewed federation/budget/alert resources; explicitly enable and
-   review the persistent GKE prerequisite resources before any lab plan; record identifiers
-   privately.
+3. The per-run project launcher, recovery controls, state backup, budget
+   delivery and independent cleanup path must be implemented and qualified before
+   any lab project is created. No current Terraform path performs that lifecycle.
 4. Confirm both roots use local state and neither uploads state to artifacts/cache.
-5. Review the minimum project role set and dedicated lifecycle workflow.
+5. Review the separate provisioner, reaper, project/billing and auditor roles;
+   their exact scopes and the dedicated lifecycle workflow.
 6. Test budget and lifecycle notification delivery plus token acceptance/rejection
    for allowed/forbidden workflow contexts.
-7. Only then plan a bounded lab create/run/export/delete cycle; preserve state until
-   independent resource inventory confirms deletion.
+7. Only after a separately reviewed activation decision can an operator plan a
+   bounded lab create/run/export/delete cycle; preserve state until independent
+   resource inventory and billing review confirm cleanup.
 
 Provider validation does not prove claim evaluation, cloud permissions, local-state
 recovery, alert delivery or the lifecycle. Those require actual qualification. The

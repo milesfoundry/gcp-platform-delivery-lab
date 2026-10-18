@@ -11,7 +11,7 @@ import math
 import re
 
 
-SCHEMA = "portfolio.gcp-run.v1"
+SCHEMA = "portfolio.gcp-run.v2"
 MAX_RUN_LIFETIME = timedelta(minutes=60)
 RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$")
 PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
@@ -27,52 +27,72 @@ ZONES = frozenset(
 
 STATES = frozenset(
     {
+        "control_bootstrapping",
         "prepared",
+        "project_create_requested",
+        "project_created",
+        "billing_link_requested",
+        "project_linked",
+        "api_enablement",
         "provisioning",
         "ready",
         "teardown_requested",
         "cleaning",
         "auditing",
+        "controls_reclaiming",
         "closed",
         "incomplete",
     }
 )
 
 TRANSITIONS = {
-    "prepared": {"provisioning", "teardown_requested", "incomplete"},
+    "control_bootstrapping": {"prepared", "incomplete"},
+    "prepared": {"project_create_requested", "teardown_requested", "incomplete"},
+    "project_create_requested": {"project_created", "teardown_requested", "incomplete"},
+    "project_created": {"billing_link_requested", "teardown_requested", "incomplete"},
+    "billing_link_requested": {"project_linked", "teardown_requested", "incomplete"},
+    "project_linked": {"api_enablement", "teardown_requested", "incomplete"},
+    "api_enablement": {"provisioning", "teardown_requested", "incomplete"},
     "provisioning": {"ready", "teardown_requested", "incomplete"},
     "ready": {"teardown_requested", "incomplete"},
     "teardown_requested": {"cleaning", "incomplete"},
     "cleaning": {"auditing", "incomplete"},
-    "auditing": {"closed", "cleaning", "incomplete"},
-    "incomplete": {"teardown_requested", "cleaning", "auditing"},
+    "auditing": {"cleaning", "controls_reclaiming", "incomplete"},
+    "controls_reclaiming": {"closed", "incomplete"},
+    "incomplete": {
+        "project_created", "project_linked", "api_enablement", "provisioning",
+        "teardown_requested", "cleaning", "auditing", "controls_reclaiming",
+    },
     "closed": set(),
 }
 
-# Larger values are deleted earlier. Bootstrap resources and the durable ledger
-# are deliberately absent: a run manifest must never authorize their deletion.
+# Larger values are deleted earlier. Only run-project resources the reaper owns
+# are admitted here. Project IAM and recovery-project controls are separate.
 DELETE_ORDER = {
-    "gcp.storage.object": 200,
-    "gcp.pubsub.subscription": 190,
-    "gcp.pubsub.topic": 180,
-    "gcp.gkehub.feature_membership": 170,
-    "gcp.gkehub.membership": 160,
-    "gcp.gke.node_pool": 150,
-    "gcp.gke.cluster": 140,
+    "gcp.storage.object": 220,
+    "gcp.pubsub.subscription": 210,
+    "gcp.pubsub.topic": 200,
+    "gcp.gkehub.feature_membership": 190,
+    "gcp.gkehub.membership": 180,
+    "gcp.gkehub.feature": 170,
+    "gcp.gke.node_pool": 160,
+    "gcp.gke.cluster": 150,
     "gcp.compute.router_nat": 110,
     "gcp.compute.router": 100,
     "gcp.compute.subnetwork": 90,
     "gcp.compute.network": 80,
 }
 
-# The per-run Scheduler trigger remains alive through workload cleanup/audit.
-# The generic Cloud Run reaper Job is persistent bootstrap infrastructure and is
-# never accepted in a run manifest.
+# These recovery-project controls are inventoried before creation, but only a
+# separate post-audit operator can remove them. The Terraform state bucket and
+# shared ledger are intentionally not in this deletion contract.
 CONTROL_DELETE_ORDER = {
-    "gcp.scheduler.job": 20,
+    "gcp.scheduler.job": 40,
+    "gcp.run.job": 30,
+    "gcp.iam.service_account": 20,
 }
 
-OWNERSHIP_PROOFS = frozenset({"run_label", "run_name", "manifest_record"})
+OWNERSHIP_PROOFS = frozenset({"run_label", "run_name", "run_project", "manifest_record"})
 REGIONAL_RESOURCE_TYPES = frozenset(
     {
         "gcp.compute.subnetwork",
@@ -148,7 +168,8 @@ def validate_intent(
         data,
         {
             "schema", "run_id", "scope", "created_at", "deadline_at", "source",
-            "finance", "cleanup", "state", "resources", "independent_audit",
+            "finance", "cleanup", "state", "resources", "controls",
+            "independent_audit",
         },
         "intent",
     )
@@ -160,10 +181,21 @@ def validate_intent(
         raise ContractError("run_id must be a bounded lab-prefixed identifier")
 
     scope = _mapping(data.get("scope"), "scope")
-    _only_keys(scope, {"project_id", "region", "zones"}, "scope")
+    _only_keys(
+        scope,
+        {"project_id", "recovery_project_id", "region", "zones"},
+        "scope",
+    )
     project_id = _string(scope.get("project_id"), "scope.project_id")
     if not PROJECT_ID.fullmatch(project_id):
         raise ContractError("scope.project_id is invalid")
+    recovery_project_id = _string(
+        scope.get("recovery_project_id"), "scope.recovery_project_id"
+    )
+    if not PROJECT_ID.fullmatch(recovery_project_id):
+        raise ContractError("scope.recovery_project_id is invalid")
+    if recovery_project_id == project_id:
+        raise ContractError("run and recovery projects must be separate")
     if scope.get("region") != REGION:
         raise ContractError("scope.region must be the approved London region")
     zones = scope.get("zones")
@@ -264,19 +296,119 @@ def validate_intent(
     cleanup_account = _string(
         cleanup.get("service_account"), "cleanup.service_account"
     )
-    if not cleanup_account.endswith(f"@{project_id}.iam.gserviceaccount.com"):
-        raise ContractError("cleanup.service_account must belong to the approved project")
+    if not cleanup_account.endswith(
+        f"@{recovery_project_id}.iam.gserviceaccount.com"
+    ):
+        raise ContractError(
+            "cleanup.service_account must belong to the recovery project"
+        )
     if cleanup.get("identity_verified") is not True:
         raise ContractError("cleanup.identity_verified must be true")
     if cleanup.get("independent_recovery_verified") is not True:
         raise ContractError("independent cleanup recovery must be verified")
 
+    controls = data.get("controls")
+    if not isinstance(controls, list):
+        raise ContractError("controls must be a list")
+    _validate_controls(
+        controls, recovery_project_id, run_id, expected_only=new_run
+    )
+    expected_reaper = (
+        f"projects/{recovery_project_id}/serviceAccounts/"
+        f"{run_id}-reaper@{recovery_project_id}.iam.gserviceaccount.com"
+    )
+    expected_reaper_email = expected_reaper.rsplit("/", 1)[1]
+    if cleanup_account != expected_reaper_email or not any(
+        item.get("type") == "gcp.iam.service_account"
+        and item.get("id") == expected_reaper
+        for item in controls
+    ):
+        raise ContractError(
+            "cleanup identity must match the predeclared per-run reaper account"
+        )
     if new_run:
-        if data.get("state") != "prepared":
-            raise ContractError("new intent must start in prepared state")
+        if data.get("state") != "control_bootstrapping":
+            raise ContractError("new intent must start in control_bootstrapping state")
         if data.get("resources") != []:
-            raise ContractError("new intent must have an empty resource list")
+            raise ContractError("new intent must have an empty workload resource list")
     return data
+
+
+def _validate_controls(
+    controls: list,
+    recovery_project_id: str,
+    run_id: str,
+    *,
+    expected_only: bool = False,
+) -> None:
+    if not controls:
+        raise ContractError("controls must list expected per-run recovery resources")
+    seen = set()
+    seen_types = set()
+    service_accounts = set()
+    for index, raw in enumerate(controls):
+        item = _mapping(raw, f"controls[{index}]")
+        _only_keys(
+            item,
+            {"type", "id", "ownership_proof", "status", "delete_attempts"},
+            f"controls[{index}]",
+        )
+        resource_type = _string(item.get("type"), f"controls[{index}].type")
+        if resource_type not in CONTROL_DELETE_ORDER:
+            raise ContractError(f"control resource type is unsupported: {resource_type}")
+        resource_id = _string(item.get("id"), f"controls[{index}].id")
+        project_segment = re.compile(
+            rf"(?:^|/)projects/{re.escape(recovery_project_id)}/"
+        )
+        if (
+            not RESOURCE_URI.fullmatch(resource_id)
+            or not project_segment.search(resource_id)
+        ):
+            raise ContractError("control id must belong to the recovery project")
+        if run_id not in resource_id:
+            raise ContractError("control id must include the run id")
+        if resource_type in {"gcp.run.job", "gcp.scheduler.job"} and (
+            f"/locations/{REGION}/" not in resource_id
+        ):
+            raise ContractError("regional recovery controls must stay in London")
+        if resource_type == "gcp.run.job" and not resource_id.endswith(
+            f"/{run_id}-reaper"
+        ):
+            raise ContractError("reaper Job id must use the deterministic run name")
+        if resource_type == "gcp.scheduler.job" and not resource_id.endswith(
+            f"/{run_id}-expiry"
+        ):
+            raise ContractError("Scheduler id must use the deterministic run name")
+        if resource_type == "gcp.iam.service_account":
+            if not resource_id.endswith(
+                (
+                    f"/{run_id}-reaper@{recovery_project_id}.iam.gserviceaccount.com",
+                    f"/{run_id}-scheduler@{recovery_project_id}.iam.gserviceaccount.com",
+                )
+            ):
+                raise ContractError("service account id must use a deterministic run name")
+            service_accounts.add(resource_id)
+        if resource_id in seen:
+            raise ContractError("control ids must be unique")
+        seen.add(resource_id)
+        seen_types.add(resource_type)
+        if item.get("ownership_proof") != "run_name":
+            raise ContractError("recovery control ownership must use deterministic run names")
+        status = item.get("status")
+        if not isinstance(status, str) or status not in {
+            "expected", "present", "deleted"
+        }:
+            raise ContractError("control status is unsupported")
+        if expected_only and status != "expected":
+            raise ContractError("new intent controls must start as expected")
+        attempts = item.get("delete_attempts", 0)
+        if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+            raise ContractError("control delete_attempts must be a non-negative integer")
+    required_types = {"gcp.run.job", "gcp.scheduler.job", "gcp.iam.service_account"}
+    if seen_types != required_types or len(service_accounts) != 2:
+        raise ContractError(
+            "expected recovery controls must include one Job, one Scheduler, and two service accounts"
+        )
 
 
 def validate_manifest(manifest: object) -> dict:
@@ -289,6 +421,21 @@ def validate_manifest(manifest: object) -> dict:
     resources = data.get("resources")
     if not isinstance(resources, list):
         raise ContractError("resources must be a list")
+    recovery_project_id = data["scope"]["recovery_project_id"]
+    controls = data.get("controls")
+    if not isinstance(controls, list):
+        raise ContractError("controls must be a list")
+    _validate_controls(controls, recovery_project_id, data["run_id"])
+    if data["state"] == "prepared" and any(
+        control["status"] != "present" for control in controls
+    ):
+        raise ContractError("prepared state requires every recovery control verified present")
+    if data["state"] in {
+        "control_bootstrapping", "prepared", "project_create_requested",
+        "project_created", "billing_link_requested", "project_linked",
+        "api_enablement",
+    } and resources:
+        raise ContractError("workload resources cannot exist before API enablement completes")
     project_id = data["scope"]["project_id"]
     run_id = data["run_id"]
     ids = set()
@@ -300,8 +447,10 @@ def validate_manifest(manifest: object) -> dict:
             f"resources[{index}]",
         )
         resource_type = _string(entry.get("type"), f"resources[{index}].type")
-        if resource_type not in DELETE_ORDER and resource_type not in CONTROL_DELETE_ORDER:
-            raise ContractError(f"resource type is not deletable: {resource_type}")
+        if resource_type not in DELETE_ORDER:
+            raise ContractError(
+                f"resource type is not owned by the run reaper: {resource_type}"
+            )
         resource_id = _string(entry.get("id"), f"resources[{index}].id")
         project_segment = re.compile(rf"(?:^|/)projects/{re.escape(project_id)}/")
         if (
@@ -322,7 +471,12 @@ def validate_manifest(manifest: object) -> dict:
         proof = _string(entry.get("ownership_proof"), "ownership_proof")
         if proof not in OWNERSHIP_PROOFS:
             raise ContractError("resource ownership proof is unsupported")
-        if run_id not in resource_id:
+        if resource_type == "gcp.gkehub.feature":
+            if not resource_id.endswith("/features/configmanagement"):
+                raise ContractError("Config Sync Feature id is unsupported")
+            if proof != "run_project":
+                raise ContractError("Feature ownership must use its dedicated run project")
+        elif run_id not in resource_id:
             raise ContractError("run-scoped resource id must include the run id")
         if (
             not isinstance(entry.get("status"), str)
@@ -336,19 +490,42 @@ def validate_manifest(manifest: object) -> dict:
     audit = None
     if "independent_audit" in data:
         audit = _mapping(data["independent_audit"], "independent_audit")
-        _only_keys(audit, {"result", "complete"}, "independent_audit")
-        if audit.get("result") not in {"passed", "failed", "incomplete"}:
+        _only_keys(
+            audit,
+            {
+                "result", "complete", "resources_absent", "project_absent",
+                "billing_unlinked", "budget_reconciled", "recovery_controls_absent",
+            },
+            "independent_audit",
+        )
+        if not isinstance(audit.get("result"), str) or audit["result"] not in {
+            "passed", "failed", "incomplete"
+        }:
             raise ContractError("independent audit result is unsupported")
-        if not isinstance(audit.get("complete"), bool):
-            raise ContractError("independent audit complete must be boolean")
+        for key in (
+            "complete", "resources_absent", "project_absent", "billing_unlinked",
+            "budget_reconciled", "recovery_controls_absent",
+        ):
+            if key in audit and not isinstance(audit[key], bool):
+                raise ContractError(f"independent audit {key} must be boolean")
 
     if data["state"] == "closed":
         if any(resource["status"] != "deleted" for resource in resources):
             raise ContractError("closed manifest must have no live run resources")
+        if any(control["status"] != "deleted" for control in controls):
+            raise ContractError("closed manifest requires recovery controls to be reclaimed")
         if audit is None or audit.get("result") != "passed":
             raise ContractError("closed manifest requires a passed independent audit")
         if audit.get("complete") is not True:
             raise ContractError("closed manifest requires complete audit coverage")
+        required_audit = (
+            "resources_absent", "project_absent", "billing_unlinked",
+            "budget_reconciled", "recovery_controls_absent",
+        )
+        if any(audit.get(key) is not True for key in required_audit):
+            raise ContractError(
+                "closed manifest requires complete resource, project, billing, budget, and control audit"
+            )
     return data
 
 
@@ -383,14 +560,13 @@ def cleanup_plan(manifest: object) -> list[dict]:
 
 
 def control_cleanup_plan(manifest: object) -> list[dict]:
-    """Plan reaper removal only after the workload inventory audit passes."""
+    """Plan operator reclamation after the workload inventory audit passes."""
     data = validate_manifest(manifest)
-    if data["state"] != "auditing":
+    if data["state"] != "controls_reclaiming":
         raise ContractError("recovery controls may be removed only after workload audit")
     if any(
         item.get("status") != "deleted"
         for item in data["resources"]
-        if item.get("type") not in CONTROL_DELETE_ORDER
     ):
         raise ContractError("all workload resources must be absent before control cleanup")
     audit = data.get("independent_audit")
@@ -398,13 +574,13 @@ def control_cleanup_plan(manifest: object) -> list[dict]:
         not isinstance(audit, dict)
         or audit.get("result") != "passed"
         or audit.get("complete") is not True
+        or audit.get("resources_absent") is not True
     ):
         raise ContractError("recovery controls require a complete independent workload audit")
     return sorted(
         (
-            item for item in data["resources"]
-            if item.get("type") in CONTROL_DELETE_ORDER
-            and item.get("status") != "deleted"
+            item for item in data["controls"]
+            if item.get("status") != "deleted"
         ),
         key=lambda item: (
             -CONTROL_DELETE_ORDER[item["type"]],

@@ -14,10 +14,11 @@ def manifest():
     project = "sample-lab-123"
     run_id = "lab-20261018-a1b2"
     return {
-        "schema": "portfolio.gcp-run.v1",
+        "schema": "portfolio.gcp-run.v2",
         "run_id": run_id,
         "scope": {
             "project_id": project,
+            "recovery_project_id": "recovery-lab-456",
             "region": "europe-west2",
             "zones": ["europe-west2-a", "europe-west2-b", "europe-west2-c"],
         },
@@ -38,11 +39,17 @@ def manifest():
             "alerts_verified": True,
         },
         "cleanup": {
-            "service_account": f"janitor@{project}.iam.gserviceaccount.com",
+            "service_account": f"{run_id}-reaper@recovery-lab-456.iam.gserviceaccount.com",
             "identity_verified": True,
             "independent_recovery_verified": True,
         },
         "state": "cleaning",
+        "controls": [
+            {"type": "gcp.run.job", "id": f"projects/recovery-lab-456/locations/europe-west2/jobs/{run_id}-reaper", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+            {"type": "gcp.scheduler.job", "id": f"projects/recovery-lab-456/locations/europe-west2/jobs/{run_id}-expiry", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+            {"type": "gcp.iam.service_account", "id": f"projects/recovery-lab-456/serviceAccounts/{run_id}-reaper@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+            {"type": "gcp.iam.service_account", "id": f"projects/recovery-lab-456/serviceAccounts/{run_id}-scheduler@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+        ],
         "resources": [
             {
                 "type": "gcp.compute.network",

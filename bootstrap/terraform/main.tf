@@ -6,21 +6,15 @@ locals {
     "created", "ready", "expiry-warning", "teardown-started",
     "teardown-passed", "teardown-failed",
   ])
-  lab_prerequisite_apis = toset([
-    "compute.googleapis.com", "container.googleapis.com",
-    "gkehub.googleapis.com", "anthosconfigmanagement.googleapis.com",
-    "gkeconnect.googleapis.com", "storage.googleapis.com",
-    "pubsub.googleapis.com",
-  ])
 }
 
 resource "google_project_service" "bootstrap" {
-  for_each = setunion(toset([
+  for_each = toset([
     "iam.googleapis.com", "iamcredentials.googleapis.com",
     "sts.googleapis.com", "cloudresourcemanager.googleapis.com",
     "billingbudgets.googleapis.com", "monitoring.googleapis.com",
     "logging.googleapis.com",
-  ]), var.enable_lab_prerequisites ? local.lab_prerequisite_apis : toset([]))
+  ])
   service            = each.value
   disable_on_destroy = false
 }
@@ -29,32 +23,6 @@ resource "google_service_account" "ci" {
   account_id   = "portfolio-delivery-ci"
   display_name = "Scoped portfolio delivery workflow identity"
   depends_on   = [google_project_service.bootstrap]
-}
-
-# Project-level lab controls outlive ephemeral runs and stay with the
-# bootstrap owner. A run cleanup must never remove shared identities or features.
-resource "google_service_account" "lab_nodes" {
-  count        = var.enable_lab_prerequisites ? 1 : 0
-  account_id   = "portfolio-lab-nodes"
-  display_name = "Portfolio lab nodes; no application cloud permissions"
-  depends_on   = [google_project_service.bootstrap]
-  lifecycle { prevent_destroy = true }
-}
-
-resource "google_project_iam_member" "lab_node_service" {
-  count   = var.enable_lab_prerequisites ? 1 : 0
-  project = var.project_id
-  role    = "roles/container.defaultNodeServiceAccount"
-  member  = "serviceAccount:${google_service_account.lab_nodes[0].email}"
-  lifecycle { prevent_destroy = true }
-}
-
-resource "google_gke_hub_feature" "config_sync" {
-  count      = var.enable_lab_prerequisites ? 1 : 0
-  name       = "configmanagement"
-  location   = "global"
-  depends_on = [google_project_service.bootstrap]
-  lifecycle { prevent_destroy = true }
 }
 
 resource "google_iam_workload_identity_pool" "github" {

@@ -66,28 +66,26 @@ database intentionally has no published host port.
 This is not yet an executable end-to-end cloud runbook. Do not run apply merely
 because validate passes. Required outstanding gates:
 
-1. Confirm the dedicated project, billing scope, region/zone, operator egress CIDR,
-   GBP billing currency, available promotional-credit balance/expiry, £5 per-run
-   planning reference and 60-minute expiry. Record gross usage, net cash and
-   projected credit runway.
-   Configure and test the GCP cost-alert email plus the 25/50/75/90/100% actual
-   and 75/100% forecast thresholds before provisioning.
-2. Activate and qualify the [separate identity/alert bootstrap](cloud-bootstrap.md).
-   Terraform state is local to a trusted operator or short-lived run workspace;
-   never upload it as an artifact/cache or commit it. Never commit plans,
-   service-account keys or environment credentials.
+1. Confirm the approved parent folder, one disposable run project, separate
+   recovery/FinOps project, billing account, London region/zones, operator egress
+   CIDR, GBP billing currency, current credit balance/expiry, £5 per-run planning
+   reference and 60-minute expiry. Record gross usage, net cash and projected
+   credit runway. Reconcile the existing project-filtered budget, then configure
+   and test each run project's cost-alert route before provisioning.
+2. Complete and qualify the [separate identity/alert bootstrap](cloud-bootstrap.md),
+   recovery controls and private state/backup path. Terraform state is currently
+   local and is not runner-loss safe; never upload it as an artifact/cache or
+   commit it. Never commit plans, service-account keys or environment credentials.
 3. Qualify the selected GKE/Config Sync versions and fleet RBAC behavior.
-4. Qualify the exact janitor IAM boundary. The current contract validator and
-   dry-run cleanup planner reject malformed manifests and wrong run IDs; they do
-   not call Google APIs or prove cross-run IAM denial. The single-project
-   layout has an unresolved Compute network scope gap. No reaper may be enabled
-   until the project boundary, least-privilege permissions and negative
-   cross-run tests pass.
+4. Qualify the exact janitor IAM boundary. Schema v2 and the dry-run planner
+   separate recovery controls and workload inventory, but do not call Google
+   APIs or prove cross-run IAM denial. No reaper may be enabled until project
+   creation, lowest-grant scopes, provider calls and negative cross-run tests pass.
 5. Implement the generation-conditional GCS ledger and out-of-band reaper; test
    runner-loss recovery and independent inventory with a fake API before a
-   separately approved bounded cloud drill. Job-local Terraform state is not a
-   replacement. Cluster deletion protection must be changed explicitly for an
-   approved teardown.
+   separately approved bounded cloud drill. Use the private remote state and
+   restore procedure, not local job state. Cluster deletion protection must be
+   changed explicitly for an approved teardown.
 6. Add application cloud IAM, Pub/Sub/GCS resources and adapters, image release
    provenance, network policies and workload deployment.
 
@@ -97,8 +95,8 @@ bootstrapped, emit only the allowlisted `created`, `ready`, `expiry-warning`,
 `teardown-started`, `teardown-passed` and `teardown-failed` events. A scheduler or
 workflow must call the 15-minute expiry warning; no scheduler or cloud-run workflow
 is implemented yet. Alert creation and delivery have not been cloud-tested.
-The emitting identity needs `logging.logWriter` on the exact lab project; do not
-grant broad Monitoring administration to the run workflow.
+The emitting identity needs `logging.logWriter` on the configured recovery
+project; do not grant broad Monitoring administration to the run workflow.
 
 No workflow in this repo has cloud credentials or performs Terraform apply.
 Budget intent is not a spending cap. A future cloud plan must list all billable
