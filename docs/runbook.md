@@ -24,9 +24,11 @@ Workload provider operations must target an exact `(type, id)` already declared
 in the run manifest inventory. A terminal successful create or delete result and
 the corresponding `expected/present/deleted` inventory status are written in
 one generation-CAS replacement. Failed or unresolved operations leave inventory
-status unchanged. This binds the credential-free operation journal to the
-predeclared cleanup inventory; ordered deletion, independent discovery/audit,
-and a real provider adapter remain unimplemented.
+status unchanged. `RecoveryController.cleanup()` switches a requested teardown
+to `cleaning`, follows the manifest's reverse dependency order, resumes the same
+pending delete after takeover, and stops on the first failed, running or
+unresolved operation. Independent discovery/audit, control reclamation and a
+real provider adapter remain unimplemented.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources

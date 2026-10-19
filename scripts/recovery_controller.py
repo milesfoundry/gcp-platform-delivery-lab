@@ -13,7 +13,7 @@ import json
 import re
 from typing import Protocol
 
-from run_contract import DELETE_ORDER, ContractError
+from run_contract import DELETE_ORDER, ContractError, cleanup_plan
 from run_ledger import LedgerSnapshot, RunLedger
 
 
@@ -235,6 +235,72 @@ class RecoveryController:
             now=at,
         )
         return OperationExecution(snapshot, operation_id, outcome)
+
+    def cleanup(
+        self,
+        run_id: str,
+        *,
+        lease_owner: str,
+    ) -> tuple[LedgerSnapshot, list[OperationExecution]]:
+        """Delete predeclared workload resources in reverse dependency order.
+
+        Cleanup stops at the first failed, running, or unresolved provider
+        operation. A later lease holder can resume the same exact intent. This
+        method does not perform independent discovery/audit or close the run.
+        """
+        snapshot = self.ledger.read(run_id)
+        if snapshot.manifest["state"] in {"teardown_requested", "incomplete"}:
+            candidate = json.loads(json.dumps(snapshot.manifest))
+            candidate["state"] = "cleaning"
+            snapshot = self.ledger.replace(
+                run_id,
+                expected_generation=snapshot.generation,
+                lease_owner=lease_owner,
+                manifest=candidate,
+                now=self.clock(),
+            )
+        elif snapshot.manifest["state"] != "cleaning":
+            raise ContractError("workload cleanup requires teardown_requested or cleaning state")
+
+        results = []
+        for resource in cleanup_plan(snapshot.manifest):
+            current = self.ledger.read(run_id)
+            intents = [
+                event
+                for event in current.manifest["operations"]
+                if event["kind"] == "intent"
+                and event["action"] == "delete"
+                and event["resource_type"] == resource["type"]
+                and event["resource_id"] == resource["id"]
+            ]
+            pending = next(
+                (
+                    event
+                    for event in reversed(intents)
+                    if not any(
+                        result["kind"] == "result"
+                        and result["operation_id"] == event["operation_id"]
+                        for result in current.manifest["operations"]
+                    )
+                ),
+                None,
+            )
+            attempt = pending["attempt"] if pending is not None else len(intents) + 1
+            execution = self.execute(
+                run_id,
+                lease_owner=lease_owner,
+                attempt=attempt,
+                action="delete",
+                resource_type=resource["type"],
+                resource_id=resource["id"],
+                request={},
+            )
+            results.append(execution)
+            if execution.state not in {"succeeded", "reconciled_absent"}:
+                return execution.snapshot, results
+            snapshot = execution.snapshot
+
+        return self.ledger.read(run_id), results
 
     @staticmethod
     def _validate_receipt(receipt: ProviderReceipt) -> None:

@@ -134,6 +134,19 @@ class RunLedgerTests(unittest.TestCase):
             if state == "prepared":
                 for control in candidate["controls"]:
                     control["status"] = "present"
+            if state == "provisioning":
+                candidate["resources"] = [
+                    {
+                        "type": "gcp.compute.network",
+                        "id": (
+                            f"projects/{self.intent['scope']['project_id']}"
+                            f"/global/networks/{RUN_ID}-network"
+                        ),
+                        "ownership_proof": "run_name",
+                        "status": "expected",
+                        "delete_attempts": 0,
+                    }
+                ]
             snapshot = self.ledger.replace(
                 RUN_ID,
                 expected_generation=snapshot.generation,
