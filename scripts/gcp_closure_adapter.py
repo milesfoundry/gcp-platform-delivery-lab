@@ -48,6 +48,7 @@ class ClosureCollectionError(RuntimeError):
 API_HOSTS = frozenset(
     {
         "cloudresourcemanager.googleapis.com",
+        "serviceusage.googleapis.com",
         "cloudbilling.googleapis.com",
         "billingbudgets.googleapis.com",
         "run.googleapis.com",
@@ -217,10 +218,111 @@ def capture_project_billing(
     if account is not None and not isinstance(account, str):
         raise ClosureCollectionError("project billing account name is malformed")
     return {
+        "project_id": project_id,
         "billing_enabled": body["billingEnabled"],
         "billing_account_id": account,
         "observed_at": _time_text(observed_at),
         "response_sha256": _digest(body),
+    }
+
+
+def capture_run_project_snapshot(
+    transport: ReadOnlyTransport,
+    project_id: str,
+    bearer_token: str,
+    *,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> dict:
+    """Capture enabled APIs and all current service-account names pre-deletion."""
+    if not isinstance(project_id, str) or not project_id:
+        raise ClosureCollectionError("project_id is required")
+    if not isinstance(bearer_token, str) or not bearer_token.strip():
+        raise ClosureCollectionError("an explicit non-empty bearer token is required")
+    project_url = _url(
+        "cloudresourcemanager.googleapis.com",
+        f"v3/projects/{quote(project_id, safe='')}",
+    )
+    status, project_body = _get_json(
+        transport, project_url, token=bearer_token, params={}
+    )
+    if status != 200 or project_body.get("projectId") != project_id:
+        raise ClosureCollectionError(
+            "pre-deletion project lookup did not match the run"
+        )
+    project_number_raw = project_body.get("projectNumber")
+    project_number = str(project_number_raw)
+    if not project_number.isdigit() or project_number.startswith("0"):
+        raise ClosureCollectionError(
+            "project lookup returned an invalid project number"
+        )
+
+    service_url = _url(
+        "serviceusage.googleapis.com",
+        f"v1/projects/{project_number}/services",
+    )
+    services, service_pages, service_sha256 = _list_pages(
+        transport,
+        service_url,
+        token=bearer_token,
+        collection_key="services",
+        params={"filter": "state:ENABLED"},
+    )
+    enabled_services = []
+    for service in services:
+        name = service.get("name")
+        prefix = f"projects/{project_number}/services/"
+        if (not isinstance(name, str) or not name.startswith(prefix)
+                or not name[len(prefix):]
+                or "/" in name[len(prefix):]
+                or service.get("state") != "ENABLED"):
+            raise ClosureCollectionError("enabled service inventory is malformed")
+        enabled_services.append(name[len(prefix):])
+    if len(set(enabled_services)) != len(enabled_services):
+        raise ClosureCollectionError("enabled service inventory contains duplicates")
+    enabled_services.sort()
+
+    service_account_url = _url(
+        "iam.googleapis.com",
+        f"v1/projects/{quote(project_id, safe='')}/serviceAccounts",
+    )
+    accounts, account_pages, account_sha256 = _list_pages(
+        transport,
+        service_account_url,
+        token=bearer_token,
+        collection_key="accounts",
+    )
+    expected_prefix = f"projects/{project_id}/serviceAccounts/"
+    service_accounts = []
+    for account in accounts:
+        name = account.get("name")
+        if (not isinstance(name, str) or not name.startswith(expected_prefix)
+                or not name[len(expected_prefix):]
+                or "/" in name[len(expected_prefix):]):
+            raise ClosureCollectionError("service-account inventory is malformed")
+        service_accounts.append(name)
+    if len(set(service_accounts)) != len(service_accounts):
+        raise ClosureCollectionError("service-account inventory contains duplicates")
+    service_accounts.sort()
+    return {
+        "project_id": project_id,
+        "project_number": project_number,
+        "observed_at": _time_text(clock()),
+        "enabled_services": enabled_services,
+        "service_accounts": service_accounts,
+        "coverage": {
+            "serviceusage.enabled_services": {
+                "complete": True,
+                "pages": service_pages,
+                "resource_count": len(enabled_services),
+                "response_sha256": service_sha256,
+            },
+            "run_project.service_accounts": {
+                "complete": True,
+                "pages": account_pages,
+                "resource_count": len(service_accounts),
+                "response_sha256": account_sha256,
+            },
+        },
     }
 
 
@@ -229,6 +331,7 @@ def collect_closure_report(
     *,
     billing_before: object,
     billing_after: object,
+    project_snapshot: object,
     transport: ReadOnlyTransport,
     bearer_token: str,
     auditor_id: str,
@@ -241,13 +344,24 @@ def collect_closure_report(
         raise ClosureCollectionError(
             f"run manifest violates the contract: {exc}"
         ) from exc
+    project_id = run["scope"]["project_id"]
+    recovery_project_id = run["scope"]["recovery_project_id"]
+    billing_account_id = run["finance"]["billing_account_id"]
     if not isinstance(billing_before, dict) or not isinstance(billing_after, dict):
         raise ClosureCollectionError(
             "pre- and post-unlink billing observations are required"
         )
-    project_id = run["scope"]["project_id"]
-    recovery_project_id = run["scope"]["recovery_project_id"]
-    billing_account_id = run["finance"]["billing_account_id"]
+    if not isinstance(project_snapshot, dict) or set(project_snapshot) != {
+        "project_id", "project_number", "observed_at", "enabled_services",
+        "service_accounts", "coverage",
+    }:
+        raise ClosureCollectionError(
+            "complete pre-deletion project inventory is required"
+        )
+    if project_snapshot["project_id"] != project_id:
+        raise ClosureCollectionError(
+            "pre-deletion inventory belongs to a different project"
+        )
     if not isinstance(auditor_id, str) or AUDITOR_ID.fullmatch(auditor_id) is None:
         raise ClosureCollectionError("auditor_id is unsupported")
     if not isinstance(bearer_token, str) or not bearer_token.strip():
@@ -307,6 +421,13 @@ def collect_closure_report(
             "response_sha256": budget_sha256,
         },
     }
+    snapshot_coverage = project_snapshot["coverage"]
+    for surface in ("serviceusage.enabled_services", "run_project.service_accounts"):
+        if surface not in snapshot_coverage:
+            raise ClosureCollectionError(
+                f"pre-deletion inventory lacks {surface} coverage"
+            )
+        coverage[surface] = snapshot_coverage[surface]
     for surface, (host, path_template, collection_key, kind) in (
         CONTROL_ENDPOINTS.items()
     ):
@@ -363,6 +484,13 @@ def collect_closure_report(
             "exists": project_exists,
             "observed_at": project_observed_at,
             "response_sha256": project_sha256,
+        },
+        "project_snapshot": {
+            "project_id": project_snapshot["project_id"],
+            "project_number": project_snapshot["project_number"],
+            "observed_at": project_snapshot["observed_at"],
+            "enabled_services": project_snapshot["enabled_services"],
+            "service_accounts": project_snapshot["service_accounts"],
         },
         "billing": {
             "before": billing_before,

@@ -821,7 +821,8 @@ class RunLedger:
         elif phase == "closure":
             expected_checks = {
                 "resource_inventory_complete", "resources_absent", "project_absent",
-                "billing_unlinked", "budget_reconciled", "recovery_controls_absent",
+                "project_services_reconciled", "billing_unlinked",
+                "budget_reconciled", "recovery_controls_absent",
             }
         else:
             raise ContractError("audit receipt phase is unsupported")

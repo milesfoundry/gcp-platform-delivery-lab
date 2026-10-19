@@ -472,7 +472,10 @@ names ([Cloud Storage bucket naming requirements](https://docs.cloud.google.com/
 Required manifest fields:
 
 - Schema/version, random run ID, dedicated project ID, London region and allowed
-  zones; fixed creation/deadline timestamps and maximum lifetime.
+  zones; a sorted exact `scope.enabled_api_services` allowlist; fixed
+  creation/deadline timestamps and maximum lifetime.
+- `finance.billing_account_id` is the exact canonical account name, alongside
+  the GBP credit, estimate, alert threshold and verified notification state.
 - Exact Terraform source revision, image digest, plan checksum, Config Sync/image
   tool versions and reviewed intent checksum.
 - `terraform_state`: distinct exact backend and backup bucket/object references,
@@ -529,17 +532,25 @@ Required manifest fields:
   aggregated Compute scopes, collection keys, derived NATs, Storage versions,
   and failure refusal. It accepts Compute's documented `NO_RESULTS_ON_PAGE`
   empty-scope warning and rejects other warning codes. This is source-level
-  adapter coverage only: no live GCP
-  call has qualified API behavior, IAM grants, API enablement, pagination under
-  real inventory, or principal-to-auditor binding. Service agents/API
-  enablement, project/billing/budget checks, closure inventory, external audit
-  identity, and the cleanup provider adapter remain open.
+  adapter coverage only: no live GCP call has qualified API behavior, IAM
+  grants, API enablement, or pagination under real inventory. The service-agent
+  and API inventories and project/billing/budget closure now have normalized
+  report contracts and mocked read-only adapters, but still need live API and
+  permission qualification. Principal-to-auditor binding, exact budget
+  ownership reconciliation, external audit identity, and cleanup mutations
+  remain open.
   `scripts/closure_auditor.py` now defines a separate credential-free closure
-  report bound to the exact manifest. It requires complete project, billing,
-  run-project budget, Cloud Run, Scheduler and service-account coverage; records
-  both sides of the expected billing unlink; checks exact manifest control IDs;
-  and requires the earlier workload receipt to have passed. The manifest now
-  requires the canonical billing account name. The budget query is scoped to
+  report bound to the exact manifest. It requires complete pre-deletion
+  Service Usage enabled-API and run-project service-account inventories, then
+  complete project, billing, run-project budget, Cloud Run, Scheduler and
+  recovery service-account coverage. The pre-deletion enabled API list must
+  exactly match the sorted `scope.enabled_api_services` policy in the run
+  manifest; unexpected API enablement fails closure. The project number binds
+  Service Usage to the correct project, and the full service-agent list is
+  fingerprinted before the project is removed. It records both sides of the
+  expected billing unlink, checks exact manifest control IDs, and requires the
+  earlier workload receipt to have passed. The manifest now requires the
+  canonical billing account name. The budget query is scoped to
   `projects/{run_project_id}` so a complete empty result proves no project-scoped
   budgets remain; the separately existing bootstrap-project budget is outside
   this run-project scope and is not treated as run-owned. This is a normalized
@@ -558,6 +569,7 @@ Required manifest fields:
   See Google's
   [project billing info](https://docs.cloud.google.com/billing/docs/reference/rest/v1/projects/getBillingInfo)
   and [budget list scope](https://docs.cloud.google.com/billing/docs/reference/budget/rest/v1/billingAccounts.budgets/list),
+  [enabled services list](https://docs.cloud.google.com/service-usage/docs/reference/rest/v1/services/list),
   [Cloud Run Jobs list](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.jobs/list),
   [Scheduler jobs list](https://docs.cloud.google.com/scheduler/docs/reference/rest/v1/projects.locations.jobs/list),
   [service accounts list](https://docs.cloud.google.com/iam/docs/reference/rest/v1/projects.serviceAccounts/list),

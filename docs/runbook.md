@@ -103,7 +103,10 @@ because validate passes. Required outstanding gates:
    CIDR, GBP billing currency, current credit balance/expiry, £5 per-run planning
    reference and 60-minute expiry. Record gross usage, net cash and projected
    credit runway. Reconcile the existing project-filtered budget, then configure
-   and test each run project's cost-alert route before provisioning.
+   and test each run project's cost-alert route before provisioning. The v2 run
+   manifest must include a sorted `scope.enabled_api_services` list matching
+   `infrastructure/lab`'s declared API set; the independent pre-deletion
+   Service Usage snapshot must match it exactly.
 2. Complete and qualify the [separate identity/alert bootstrap](cloud-bootstrap.md),
    recovery controls and private state/backup path. Terraform state is currently
    local and is not runner-loss safe; never upload it as an artifact/cache or

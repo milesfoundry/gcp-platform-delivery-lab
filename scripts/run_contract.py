@@ -187,7 +187,8 @@ def _audit_summary(receipt: dict) -> dict:
         "manifest_generation": receipt["manifest_generation"],
     }
     for key in (
-        "project_absent", "billing_unlinked", "budget_reconciled",
+        "project_absent", "project_services_reconciled", "billing_unlinked",
+        "budget_reconciled",
         "recovery_controls_absent",
     ):
         if key in receipt["checks"]:
@@ -245,7 +246,10 @@ def validate_intent(
     scope = _mapping(data.get("scope"), "scope")
     _only_keys(
         scope,
-        {"project_id", "recovery_project_id", "region", "zones"},
+        {
+            "project_id", "recovery_project_id", "region", "zones",
+            "enabled_api_services",
+        },
         "scope",
     )
     project_id = _string(scope.get("project_id"), "scope.project_id")
@@ -269,6 +273,22 @@ def validate_intent(
         or frozenset(zones) != ZONES
     ):
         raise ContractError("scope.zones must name the three London zones")
+    enabled_services = scope.get("enabled_api_services")
+    if (
+        not isinstance(enabled_services, list)
+        or not enabled_services
+        or len(enabled_services) > 64
+        or any(
+            not isinstance(service, str) or not API_SERVICE.fullmatch(service)
+            for service in enabled_services
+        )
+        or len(set(enabled_services)) != len(enabled_services)
+        or enabled_services != sorted(enabled_services)
+    ):
+        raise ContractError(
+            "scope.enabled_api_services must be a sorted, unique list of "
+            "API service names"
+        )
 
     started = _timestamp(data.get("created_at"), "created_at")
     deadline = _timestamp(data.get("deadline_at"), "deadline_at")
@@ -919,7 +939,8 @@ def validate_manifest(manifest: object) -> dict:
             if phase == "workload"
             else {
                 "resource_inventory_complete", "resources_absent", "project_absent",
-                "billing_unlinked", "budget_reconciled", "recovery_controls_absent",
+                "project_services_reconciled", "billing_unlinked",
+                "budget_reconciled", "recovery_controls_absent",
             }
         )
         checks = _mapping(receipt["checks"], "audit receipt checks")

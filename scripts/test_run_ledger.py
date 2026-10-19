@@ -859,6 +859,7 @@ class RunLedgerTests(unittest.TestCase):
                 "resource_inventory_complete": True,
                 "resources_absent": True,
                 "project_absent": True,
+                "project_services_reconciled": True,
                 "billing_unlinked": True,
                 "budget_reconciled": True,
                 "recovery_controls_absent": True,

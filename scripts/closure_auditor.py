@@ -17,7 +17,7 @@ from independent_auditor import (
     AuditReportError,
     manifest_fingerprint,
 )
-from run_contract import ContractError, validate_manifest
+from run_contract import API_SERVICE, ContractError, validate_manifest
 from run_ledger import LedgerSnapshot, RunLedger
 
 
@@ -33,6 +33,8 @@ BUDGET_NAME = re.compile(
 SURFACES = frozenset(
     {
         "resourcemanager.project",
+        "serviceusage.enabled_services",
+        "run_project.service_accounts",
         "billing.project_info",
         "billing.budgets",
         "run.jobs",
@@ -48,6 +50,7 @@ CONTROL_SURFACE = {
 REPORT_FIELDS = {
     "schema", "run_id", "project_id", "recovery_project_id",
     "manifest_sha256", "observed_at", "auditor_id", "coverage", "project",
+    "project_snapshot",
     "billing", "budget_scope", "budget_observed_at", "budgets",
     "controls_observed_at", "controls",
 }
@@ -152,18 +155,78 @@ def assess_closure(manifest: object, report: object) -> AuditAssessment:
             != int(project["exists"])):
         raise AuditReportError("project coverage count contradicts its exact lookup")
 
+    project_snapshot = report["project_snapshot"]
+    if not isinstance(project_snapshot, dict) or set(project_snapshot) != {
+        "project_id", "project_number", "observed_at", "enabled_services",
+        "service_accounts",
+    }:
+        raise AuditReportError("pre-deletion run-project inventory is malformed")
+    if project_snapshot["project_id"] != run["scope"]["project_id"]:
+        raise AuditReportError(
+            "pre-deletion inventory belongs to a different run project"
+        )
+    project_number = project_snapshot["project_number"]
+    if (not isinstance(project_number, str) or not project_number.isdigit()
+            or project_number.startswith("0")):
+        raise AuditReportError(
+            "project snapshot requires the exact numeric project number"
+        )
+    project_snapshot_observed = _time(
+        project_snapshot["observed_at"], "project snapshot observed_at"
+    )
+    enabled_services = project_snapshot["enabled_services"]
+    if (not isinstance(enabled_services, list)
+            or any(not isinstance(service, str) or not API_SERVICE.fullmatch(service)
+                   for service in enabled_services)
+            or len(set(enabled_services)) != len(enabled_services)
+            or enabled_services != sorted(enabled_services)):
+        raise AuditReportError("enabled service inventory is malformed")
+    service_accounts = project_snapshot["service_accounts"]
+    expected_sa_prefix = (
+        f"projects/{run['scope']['project_id']}/serviceAccounts/"
+    )
+    if (not isinstance(service_accounts, list)
+            or any(not isinstance(name, str)
+                   or not name.startswith(expected_sa_prefix)
+                   or not name[len(expected_sa_prefix):]
+                   or "/" in name[len(expected_sa_prefix):]
+                   for name in service_accounts)
+            or len(set(service_accounts)) != len(service_accounts)
+            or service_accounts != sorted(service_accounts)):
+        raise AuditReportError("run-project service account inventory is malformed")
+    if ("serviceusage.enabled_services" in coverage
+            and coverage["serviceusage.enabled_services"]["resource_count"]
+            != len(enabled_services)):
+        raise AuditReportError(
+            "enabled API coverage count does not match its inventory"
+        )
+    if ("run_project.service_accounts" in coverage
+            and coverage["run_project.service_accounts"]["resource_count"]
+            != len(service_accounts)):
+        raise AuditReportError(
+            "service-account coverage count does not match its inventory"
+        )
+    if project_snapshot_observed >= project_observed:
+        raise AuditReportError("run-project inventory must precede project absence")
+
     billing = report["billing"]
     if not isinstance(billing, dict) or set(billing) != {"before", "after"}:
         raise AuditReportError("billing observations are malformed")
     before, after = billing["before"], billing["after"]
     observation_fields = {
-        "billing_enabled", "billing_account_id", "observed_at", "response_sha256"
+        "project_id", "billing_enabled", "billing_account_id", "observed_at",
+        "response_sha256",
     }
     if (not isinstance(before, dict) or set(before) != observation_fields
             or not isinstance(after, dict) or set(after) != observation_fields):
         raise AuditReportError("billing before/after observations are malformed")
     if any(not isinstance(item["billing_enabled"], bool) for item in (before, after)):
         raise AuditReportError("billing_enabled observations must be boolean")
+    if any(
+        item["project_id"] != run["scope"]["project_id"]
+        for item in (before, after)
+    ):
+        raise AuditReportError("billing observations belong to a different run project")
     expected_account = run["finance"]["billing_account_id"]
     if (before["billing_account_id"] != expected_account
             or not BILLING_ACCOUNT.fullmatch(expected_account)):
@@ -179,6 +242,8 @@ def assess_closure(manifest: object, report: object) -> AuditAssessment:
     _fingerprint(after["response_sha256"], "post-unlink billing fingerprint")
     if before_observed >= after_observed:
         raise AuditReportError("billing unlink observations must be chronological")
+    if after_observed >= project_observed:
+        raise AuditReportError("billing unlink must precede project deletion")
     if ("billing.project_info" in coverage
             and coverage["billing.project_info"]["resource_count"] != 2):
         raise AuditReportError("billing coverage must contain both unlink observations")
@@ -271,6 +336,8 @@ def assess_closure(manifest: object, report: object) -> AuditAssessment:
             item["status"] == "deleted" for item in run["resources"]
         ),
         "project_absent": complete and project["exists"] is False,
+        "project_services_reconciled": complete and enabled_services
+            == run["scope"]["enabled_api_services"],
         "billing_unlinked": complete and before["billing_enabled"] is True
             and after["billing_enabled"] is False
             and after["billing_account_id"] in (None, ""),
@@ -282,7 +349,15 @@ def assess_closure(manifest: object, report: object) -> AuditAssessment:
     }
     normalized_controls.sort(key=lambda item: (item["type"], item["id"]))
     normalized_budgets.sort()
-    inventory = {"budgets": normalized_budgets, "controls": normalized_controls}
+    inventory = {
+        "run_project": {
+            "project_number": project_number,
+            "enabled_services": enabled_services,
+            "service_accounts": service_accounts,
+        },
+        "budgets": normalized_budgets,
+        "controls": normalized_controls,
+    }
     inventory_sha256 = _digest(inventory)
     evidence_sha256 = _digest({
         "schema": report["schema"], "run_id": report["run_id"],
@@ -290,6 +365,7 @@ def assess_closure(manifest: object, report: object) -> AuditAssessment:
         "recovery_project_id": report["recovery_project_id"],
         "manifest_sha256": report["manifest_sha256"], "observed_at": observed_text,
         "auditor_id": auditor_id, "coverage": coverage, "project": project,
+        "project_snapshot": project_snapshot,
         "billing": billing, "budget_observed_at": report["budget_observed_at"],
         "controls_observed_at": report["controls_observed_at"], "inventory": inventory,
     })

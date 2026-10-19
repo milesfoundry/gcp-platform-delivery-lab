@@ -27,12 +27,24 @@ def closure_ready_manifest():
 
 def report(*, manifest=None, coverage=None, budgets=None, controls=None):
     run = manifest or closure_ready_manifest()
+    service_accounts = [
+        f"projects/{run['scope']['project_id']}/serviceAccounts/"
+        f"service-123456789@gcp-sa-container.iam.gserviceaccount.com"
+    ]
     if coverage is None:
+        counts = {
+            "resourcemanager.project": 0,
+            "serviceusage.enabled_services": len(
+                run["scope"]["enabled_api_services"]
+            ),
+            "run_project.service_accounts": len(service_accounts),
+            "billing.project_info": 2,
+        }
         coverage = {
             surface: {
                 "complete": True,
                 "pages": 2 if surface == "billing.project_info" else 1,
-                "resource_count": 2 if surface == "billing.project_info" else 0,
+                "resource_count": counts.get(surface, 0),
                 "response_sha256": f"{index:064x}",
             }
             for index, surface in enumerate(sorted(SURFACES), start=1)
@@ -46,6 +58,13 @@ def report(*, manifest=None, coverage=None, budgets=None, controls=None):
         "observed_at": "2026-10-19T01:30:00Z",
         "auditor_id": "independent-reader",
         "coverage": coverage,
+        "project_snapshot": {
+            "project_id": run["scope"]["project_id"],
+            "project_number": "123456789",
+            "observed_at": "2026-10-19T01:20:00Z",
+            "enabled_services": run["scope"]["enabled_api_services"],
+            "service_accounts": service_accounts,
+        },
         "project": {
             "exists": False,
             "observed_at": "2026-10-19T01:25:00Z",
@@ -53,12 +72,14 @@ def report(*, manifest=None, coverage=None, budgets=None, controls=None):
         },
         "billing": {
             "before": {
+                "project_id": run["scope"]["project_id"],
                 "billing_enabled": True,
                 "billing_account_id": run["finance"]["billing_account_id"],
                 "observed_at": "2026-10-19T01:10:00Z",
                 "response_sha256": "b" * 64,
             },
             "after": {
+                "project_id": run["scope"]["project_id"],
                 "billing_enabled": False,
                 "billing_account_id": None,
                 "observed_at": "2026-10-19T01:15:00Z",
@@ -83,6 +104,7 @@ class ClosureAuditorTests(unittest.TestCase):
                 "resource_inventory_complete": True,
                 "resources_absent": True,
                 "project_absent": True,
+                "project_services_reconciled": True,
                 "billing_unlinked": True,
                 "budget_reconciled": True,
                 "recovery_controls_absent": True,
@@ -133,6 +155,11 @@ class ClosureAuditorTests(unittest.TestCase):
             assess_closure(run, evidence)
 
         evidence = report(manifest=run)
+        evidence["billing"]["before"]["project_id"] = "other-project"
+        with self.assertRaises(AuditReportError):
+            assess_closure(run, evidence)
+
+        evidence = report(manifest=run)
         evidence["billing"]["after"]["billing_enabled"] = True
         result = assess_closure(run, evidence)
         self.assertEqual(result.result, "failed")
@@ -145,10 +172,28 @@ class ClosureAuditorTests(unittest.TestCase):
         with self.assertRaises(AuditReportError):
             assess_closure(run, evidence)
 
+    def test_enabled_api_inventory_must_match_the_manifest(self):
+        run = closure_ready_manifest()
+        evidence = report(manifest=run)
+        evidence["project_snapshot"]["enabled_services"] = [
+            *run["scope"]["enabled_api_services"],
+            "unexpected.googleapis.com",
+        ]
+        evidence["project_snapshot"]["enabled_services"].sort()
+        evidence["coverage"]["serviceusage.enabled_services"]["resource_count"] += 1
+        result = assess_closure(run, evidence)
+        self.assertEqual(result.result, "failed")
+        self.assertFalse(result.checks["project_services_reconciled"])
+
     def test_billing_observations_must_be_ordered_and_precede_report(self):
         run = closure_ready_manifest()
         evidence = report(manifest=run)
         evidence["billing"]["after"]["observed_at"] = "2026-10-19T01:09:00Z"
+        with self.assertRaises(AuditReportError):
+            assess_closure(run, evidence)
+
+        evidence = report(manifest=run)
+        evidence["billing"]["after"]["observed_at"] = "2026-10-19T01:26:00Z"
         with self.assertRaises(AuditReportError):
             assess_closure(run, evidence)
 

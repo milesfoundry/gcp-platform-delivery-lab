@@ -31,6 +31,21 @@ def intent():
             "project_id": PROJECT,
             "recovery_project_id": "recovery-lab-456",
             "region": "europe-west2",
+            "enabled_api_services": [
+                "anthosconfigmanagement.googleapis.com",
+                "cloudresourcemanager.googleapis.com",
+                "compute.googleapis.com",
+                "container.googleapis.com",
+                "gkeconnect.googleapis.com",
+                "gkehub.googleapis.com",
+                "iam.googleapis.com",
+                "iamcredentials.googleapis.com",
+                "logging.googleapis.com",
+                "monitoring.googleapis.com",
+                "pubsub.googleapis.com",
+                "serviceusage.googleapis.com",
+                "storage.googleapis.com",
+            ],
             "zones": [
                 "europe-west2-a",
                 "europe-west2-b",
@@ -101,7 +116,8 @@ def audit_receipt(sequence, phase, *, checks=None, result="passed", complete=Tru
             if phase == "workload"
             else {
                 "resource_inventory_complete": True, "resources_absent": True,
-                "project_absent": True, "billing_unlinked": True,
+                "project_absent": True, "project_services_reconciled": True,
+                "billing_unlinked": True,
                 "budget_reconciled": True, "recovery_controls_absent": True,
             }
         )
@@ -139,6 +155,17 @@ class RunIntentTests(unittest.TestCase):
         candidate["finance"]["billing_account_id"] = "not-an-account"
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
+
+    def test_enabled_api_service_policy_must_be_sorted_unique_and_valid(self):
+        for services in (
+            ["compute.googleapis.com", "compute.googleapis.com"],
+            ["compute.googleapis.com", "anthosconfigmanagement.googleapis.com"],
+            ["not-an-api"],
+        ):
+            candidate = intent()
+            candidate["scope"]["enabled_api_services"] = services
+            with self.subTest(services=services), self.assertRaises(ContractError):
+                validate_intent(candidate, now=NOW)
 
     def test_wrong_region_or_zone_is_rejected(self):
         for field, value in (
