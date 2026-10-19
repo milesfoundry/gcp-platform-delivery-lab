@@ -10,9 +10,14 @@ cases and next implementation packet. The validator in
 `scripts/independent_auditor.py` are credential-free source components. The
 ledger adapter has fake-store tests for response-loss retries, leases,
 heartbeats, and stale-writer rejection but no configured bucket, cloud
-identity, deployed ledger, Cloud Run reaper, real provider adapter,
-authenticated external inventory reader/auditor, janitor or cloud
-qualification. The manifest records deterministic provider-operation intents
+identity, deployed ledger, Cloud Run reaper, workload cleanup provider adapter,
+authenticated external auditor, janitor or cloud qualification. The
+read-only `gcp_inventory_adapter.py` collects the 25 workload surfaces using
+an explicitly supplied bearer token and injected GET-only transport; its
+mocked transport tests do not establish live IAM, API enablement, complete
+provider behavior, or an authenticated auditor identity. It does not cover
+service agents/API enablement, project/billing/budget closure, or recovery
+control inventory. The manifest records deterministic provider-operation intents
 and results, including the lifecycle phase that authorized each intent; fake
 provider tests cover a committed create with a lost response and exact-ID
 reconciliation after lease takeover. Append-only progress receipts retain the

@@ -511,18 +511,51 @@ Required manifest fields:
   observation without appending a duplicate.
 - `scripts/independent_auditor.py` defines the normalized read-only report for
   workload absence checks and binds the evidence to a fingerprint of the exact
-  manifest snapshot it inspected. A complete report must cover Compute addresses,
-  disks, firewalls, instances, networks, router NATs, routers and subnetworks;
+  manifest snapshot it inspected. A complete report must cover Compute
+  addresses, backend services, disks, firewalls, forwarding rules, health checks,
+  instances, instance groups, networks, routes, router NATs, routers, subnetworks,
+  target instances and target pools;
   GKE clusters and node pools; GKE Hub feature memberships, features and
   memberships; Pub/Sub subscriptions and topics; and Storage buckets, objects
   and object versions. Every surface includes pagination completeness, count
   and response fingerprint. The assessor fingerprints normalized evidence,
   fails on any observed resource or any manifest item not marked deleted, and
   returns `incomplete` when a required surface is absent or only partially
-  queried. This is a strict input contract, not a GCP client: authenticated
-  provider calls, coverage completeness, service-agent/API inventory,
-  project/billing/budget checks and final control audit still need independent
-  adapter and identity qualification.
+  queried. `scripts/gcp_inventory_adapter.py` now implements read-only paginated
+  REST collection for those 25 workload surfaces. It requires an explicit
+  bearer token and injected GET-only transport, aborts on non-200, malformed,
+  warning, unreachable, or repeated-token responses, and never discovers
+  credentials or mutates resources. Mocked transport tests cover pagination,
+  aggregated Compute scopes, collection keys, derived NATs, Storage versions,
+  and failure refusal. It accepts Compute's documented `NO_RESULTS_ON_PAGE`
+  empty-scope warning and rejects other warning codes. This is source-level
+  adapter coverage only: no live GCP
+  call has qualified API behavior, IAM grants, API enablement, pagination under
+  real inventory, or principal-to-auditor binding. Service agents/API
+  enablement, project/billing/budget checks, closure inventory, external audit
+  identity, and the cleanup provider adapter remain open.
+  The REST resource/response mapping follows Google's primary references for
+  [Compute aggregated lists](https://docs.cloud.google.com/compute/docs/reference/rest/v1/addresses/aggregatedList),
+  including [backend services](https://docs.cloud.google.com/compute/docs/reference/rest/v1/backendServices/aggregatedList),
+  [forwarding rules](https://docs.cloud.google.com/compute/docs/reference/rest/v1/forwardingRules/aggregatedList),
+  [health checks](https://docs.cloud.google.com/compute/docs/reference/rest/v1/healthChecks/aggregatedList),
+  [instance groups](https://docs.cloud.google.com/compute/docs/reference/rest/v1/instanceGroups/aggregatedList),
+  [target instances](https://docs.cloud.google.com/compute/docs/reference/rest/v1/targetInstances/aggregatedList)
+  and
+  [target pools](https://docs.cloud.google.com/compute/docs/reference/rest/v1/targetPools/aggregatedList),
+  [GKE clusters](https://docs.cloud.google.com/kubernetes-engine/docs/reference/rest/v1/projects.locations.clusters/list)
+  and
+  [node pools](https://docs.cloud.google.com/kubernetes-engine/docs/reference/rest/v1/projects.locations.clusters.nodePools/list),
+  [project-visible Fleet locations](https://docs.cloud.google.com/kubernetes-engine/fleet-management/docs/reference/rest/v1beta/projects.locations/list),
+  [Fleet memberships](https://docs.cloud.google.com/kubernetes-engine/fleet-management/docs/reference/rest/v1/projects.locations.memberships/list),
+  [Fleet features](https://docs.cloud.google.com/kubernetes-engine/fleet-management/docs/reference/rest/v1/projects.locations.features/list),
+  [membership features](https://docs.cloud.google.com/kubernetes-engine/fleet-management/docs/reference/rest/v2/projects.locations.memberships.features/list),
+  [Pub/Sub topics](https://docs.cloud.google.com/pubsub/docs/reference/rest/v1/projects.topics/list)
+  and
+  [subscriptions](https://docs.cloud.google.com/pubsub/docs/reference/rest/v1/projects.subscriptions/list),
+  [Storage buckets](https://docs.cloud.google.com/storage/docs/json_api/v1/buckets/list)
+  and
+  [object versions](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/list).
 - Gross cost estimate, measured gross usage, currency, credit balance/expiry
   observation time, net-cash estimate and later billing reconciliation reference.
 - Immutable links/checksums to sanitized evidence and an explicit limitation list.
