@@ -892,6 +892,13 @@ class RunLedgerTests(unittest.TestCase):
         class RetirementProvider:
             lose_project_delete_response = True
 
+            def authorize_actor(self, lease_owner, action, resource_type):
+                if lease_owner != "operator:project-reclaimer":
+                    raise LedgerConflict(
+                        "project retirement requires the named project-reclaimer lease"
+                    )
+                return "google-user-12345678901234567890"
+
             def submit(self, action, resource_type, resource_id, request):
                 if (
                     resource_type == "gcp.resourcemanager.project"
@@ -984,6 +991,16 @@ class RunLedgerTests(unittest.TestCase):
         )
         self.assertEqual(project.state, "succeeded")
         operator = self.ledger.read(RUN_ID)
+        retirement_intents = [
+            event for event in operator.manifest["operations"]
+            if event["kind"] == "intent"
+            and event["phase"] == "project_retiring"
+        ]
+        self.assertEqual(len(retirement_intents), 2)
+        self.assertEqual(
+            {event["actor_id"] for event in retirement_intents},
+            {"google-user-12345678901234567890"},
+        )
         candidate = deepcopy(operator.manifest)
         candidate["state"] = "controls_reclaiming"
         for control in candidate["controls"]:
@@ -995,6 +1012,16 @@ class RunLedgerTests(unittest.TestCase):
             manifest=candidate,
             now=self.now + timedelta(seconds=39),
         )
+        replayed_project = controller.execute(
+            RUN_ID,
+            lease_owner="operator:project-reclaimer",
+            attempt=1,
+            action="delete",
+            resource_type="gcp.resourcemanager.project",
+            resource_id=f"projects/{self.intent['scope']['project_id']}",
+            request={},
+        )
+        self.assertEqual(replayed_project.state, "succeeded")
         operator = self.ledger.release_lease(
             RUN_ID,
             expected_generation=operator.generation,

@@ -616,6 +616,7 @@ class RunLedger:
         resource_type: str,
         resource_id: str,
         request_sha256: str,
+        actor_id: str | None = None,
         now: datetime | None = None,
     ) -> LedgerSnapshot:
         """Persist an exact provider request before its caller makes the request.
@@ -651,6 +652,13 @@ class RunLedger:
             raise LedgerConflict(
                 "project retirement requires the named project-reclaimer lease"
             )
+        retirement_delete_target = (
+            action == "delete"
+            and resource_type in {
+                "gcp.billing.project_billing_info",
+                "gcp.resourcemanager.project",
+            }
+        )
         prior_attempts = [
             event
             for event in current.manifest["operations"]
@@ -664,10 +672,38 @@ class RunLedger:
             prior = prior_attempts[-1]
             if prior["request_sha256"] != request_sha256:
                 raise LedgerConflict("provider attempt already has a different request")
+            is_retirement_intent = (
+                retirement_delete_target and prior["phase"] == "project_retiring"
+            )
+            if is_retirement_intent and (
+                not isinstance(actor_id, str)
+                or re.fullmatch(r"google-user-[A-Za-z0-9._~-]{1,255}", actor_id) is None
+            ):
+                raise LedgerConflict(
+                    "project retirement operation requires a verified Google user subject"
+                )
+            if not is_retirement_intent and actor_id is not None:
+                raise LedgerConflict("this provider operation does not accept an actor identity")
+            if prior.get("actor_id") != actor_id:
+                raise LedgerConflict("provider attempt is bound to a different actor identity")
             # The current lifecycle phase may have advanced while this request
             # was unresolved. Return the original intent for reconciliation;
             # callers must not interpret this replay as permission to call GCP.
             return current
+
+        retiring_delete = (
+            current.manifest["state"] == "project_retiring"
+            and retirement_delete_target
+        )
+        if retiring_delete and (
+            not isinstance(actor_id, str)
+            or re.fullmatch(r"google-user-[A-Za-z0-9._~-]{1,255}", actor_id) is None
+        ):
+            raise LedgerConflict(
+                "project retirement operation requires a verified Google user subject"
+            )
+        if not retiring_delete and actor_id is not None:
+            raise LedgerConflict("this provider operation does not accept an actor identity")
 
         if action == "create" and _parse_time(
             current.manifest["deadline_at"], "deadline_at"
@@ -688,6 +724,8 @@ class RunLedger:
             "phase": phase,
             "at": _format_time(at),
         }
+        if actor_id is not None:
+            intent["actor_id"] = actor_id
         for event in current.manifest["operations"]:
             if event["kind"] == "intent" and event["operation_id"] == op_id:
                 if {

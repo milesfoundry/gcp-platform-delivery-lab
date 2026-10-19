@@ -276,11 +276,16 @@ poller keeps the operation unresolved while Resource Manager reports
 `DELETE_REQUESTED`; it resolves only after exact project lookup returns 404.
 Recovery-control reclamation is gated on that reconciled absence, and final
 closure still requires a separate complete project/billing/budget/control audit.
-The ledger additionally requires the named `operator:project-reclaimer` lease.
-That lease label is not yet bound to a verified cloud principal, so this path
-is source-level and fake-transport tested, not authorized or qualified for live
-use. For cost monitoring, the Budget API can scope an alerts-only budget to one
-project under the billing account, while Google recommends keeping
+The controller requires the named `operator:project-reclaimer` lease and asks
+the project lifecycle adapter to verify that caller's Google user token through
+UserInfo. The verified `sub` is recorded in the operation intent, and every
+teardown API request rechecks the configured expected email before using its
+bearer token. Only human user tokens with verified email are supported. The
+deployed runtime must still prove that its GCS ledger writer uses the same
+expected principal; provider and ledger code are not wired together yet. This
+path is fake-tested source, not authorized or qualified for live use. For cost
+monitoring, the Budget API can scope an alerts-only budget to one project under
+the billing account, while Google recommends keeping
 programmatic budget-notification topics in a FinOps administration project.
 These are design capabilities, not proof that the current account has the
 required parent or billing permissions.
@@ -580,7 +585,10 @@ Required manifest fields:
   project deletion. Teardown enters `project_retiring` only after the passed
   workload audit and empty workload inventory. The ledger requires a successful
   billing unlink before it accepts a project-delete intent; only the named
-  project-reclaimer lease can record those operations. Project deletion stays
+  project-reclaimer lease can record those operations, after its Google user
+  token is verified against the configured expected email. The stable user
+  subject is retained on the operation intent, and the same identity check runs
+  on every project-retirement API call. Project deletion stays
   `running` while the exact project is `DELETE_REQUESTED` and resolves only on
   exact 404. The transition to `controls_reclaiming` requires resolved billing
   unlink and project deletion; `closed` still requires the independent full
@@ -590,7 +598,8 @@ Required manifest fields:
   sends only writable `billingAccountName`, omitting output-only fields.
   The adapter is not deployed or wired to a trusted launcher, and does not solve
   creator Owner grants, billing-budget preflight, or independent
-  principal-to-ledger binding. It remains unqualified for live use. Google
+  binding between the GCS ledger writer and the configured project-reclaimer
+  principal. It remains unqualified for live use. Google
   documents project creation as a separate asynchronous operation
   from billing association; billing association can enable charges. See the
   [projects.create API](https://docs.cloud.google.com/resource-manager/reference/rest/v3/projects/create),

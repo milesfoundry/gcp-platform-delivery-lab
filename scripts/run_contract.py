@@ -661,6 +661,7 @@ def _validate_operations(
                 {
                     "sequence", "kind", "operation_id", "attempt", "action",
                     "resource_type", "resource_id", "request_sha256", "phase", "at",
+                    "actor_id",
                 },
                 f"operations[{index - 1}]",
             )
@@ -686,6 +687,24 @@ def _validate_operations(
             _validate_operation_target(
                 action, resource_type, resource_id, phase, run_id, project_id
             )
+            retiring_delete = (
+                phase == "project_retiring"
+                and action == "delete"
+                and resource_type in {
+                    "gcp.billing.project_billing_info",
+                    "gcp.resourcemanager.project",
+                }
+            )
+            actor_id = event.get("actor_id")
+            if retiring_delete and (
+                not isinstance(actor_id, str)
+                or re.fullmatch(r"google-user-[A-Za-z0-9._~-]{1,255}", actor_id) is None
+            ):
+                raise ContractError(
+                    "project retirement operation requires a verified Google user subject"
+                )
+            if not retiring_delete and "actor_id" in event:
+                raise ContractError("actor_id is unsupported for this provider operation")
             target = (action, resource_type, resource_id)
             if target in pending_target:
                 raise ContractError("cannot issue a new provider request while the previous attempt is unresolved")

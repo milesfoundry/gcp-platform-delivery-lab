@@ -34,8 +34,11 @@ The project lifecycle adapter also supports the separate post-audit project
 reclaimer: billing must be unlinked first, project deletion is journaled, and the
 operation remains unresolved while Resource Manager reports `DELETE_REQUESTED`.
 Recovery controls can be reclaimed only after exact project absence is
-reconciled. Its named operator lease is not yet bound to a verified cloud
-principal; this path is fake-tested only and is not live-qualified.
+reconciled. The controller requires the named reclaimer lease, verifies the
+Google user token against a configured expected email, and records the stable
+Google subject with each retirement intent. Each retirement API request is
+verified before use. The GCS ledger writer is not yet wired to the same
+principal, so this path is fake-tested only and is not live-qualified.
 `gcp_cleanup_adapter.py` now implements a deletion-only adapter for exact
 Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GCS objects,
 GKE node-pool/cluster, and GKE Fleet membership/feature resources. It requires an

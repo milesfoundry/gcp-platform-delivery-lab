@@ -164,6 +164,7 @@ def retirement_operations():
             "resource_id": resource_id,
             "request_sha256": request_sha256,
             "phase": "project_retiring",
+            "actor_id": "google-user-12345678901234567890",
             "at": f"2026-10-18T12:0{attempt}:00Z",
         }
         operations.append(intent_event)

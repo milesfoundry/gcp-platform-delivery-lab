@@ -20,6 +20,7 @@ PARENT = "folders/123456"
 BILLING = "billingAccounts/ABCDEF-123456-GHIJKL"
 API = "compute.googleapis.com"
 TOKEN = "ephemeral-test-token"
+RECLAIMER_EMAIL = "project-reclaimer@example.com"
 
 
 class FakeTokenSource:
@@ -48,7 +49,22 @@ class FakeTransport:
         return self.responses.pop(0)
 
 
-def adapter(transport, *, services=None):
+class FakeIdentityTransport:
+    def __init__(self, *, email=RECLAIMER_EMAIL):
+        self.email = email
+        self.calls = []
+
+    def get(self, url, *, params, headers, timeout, allow_redirects):
+        self.calls.append((url, params, headers, timeout, allow_redirects))
+        return FakeResponse(200, {
+            "sub": "12345678901234567890",
+            "email": self.email,
+            "email_verified": True,
+        })
+
+
+def adapter(transport, *, services=None, identity_transport=None):
+    identity_transport = identity_transport or FakeIdentityTransport()
     return GCPProjectLifecycleAdapter(
         transport,
         FakeTokenSource(),
@@ -57,6 +73,8 @@ def adapter(transport, *, services=None):
         parent=PARENT,
         billing_account_name=BILLING,
         enabled_services=sorted(services or [API]),
+        identity_transport=identity_transport,
+        project_reclaimer_email=RECLAIMER_EMAIL,
     )
 
 
@@ -360,6 +378,47 @@ class GCPProjectLifecycleAdapterTests(unittest.TestCase):
                 "delete", PROJECT_TYPE, f"projects/{PROJECT}", {}
             )
         self.assertEqual([call[0] for call in attached_billing.calls], ["GET", "GET"])
+
+    def test_project_retirement_refuses_a_different_verified_google_principal(self):
+        identity = FakeIdentityTransport(email="someone-else@example.com")
+        transport = FakeTransport([])
+        provider = adapter(transport, identity_transport=identity)
+        with self.assertRaisesRegex(
+            ProjectLifecycleError, "Google principal could not be verified"
+        ):
+            provider.submit("delete", PROJECT_TYPE, f"projects/{PROJECT}", {})
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(len(identity.calls), 1)
+
+    def test_named_project_reclaimer_lease_returns_verified_google_subject(self):
+        identity = FakeIdentityTransport()
+        provider = adapter(FakeTransport([]), identity_transport=identity)
+        with self.assertRaisesRegex(ProjectLifecycleError, "named project-reclaimer"):
+            provider.authorize_actor(
+                "operator:other", "delete", PROJECT_TYPE
+            )
+        self.assertEqual(identity.calls, [])
+        actor = provider.authorize_actor(
+            "operator:project-reclaimer", "delete", PROJECT_TYPE
+        )
+        self.assertEqual(actor.email, RECLAIMER_EMAIL)
+        self.assertEqual(actor.auditor_id, "google-user-12345678901234567890")
+        self.assertEqual(len(identity.calls), 1)
+
+    def test_project_retirement_fails_closed_without_identity_configuration(self):
+        provider = GCPProjectLifecycleAdapter(
+            FakeTransport([]),
+            FakeTokenSource(),
+            project_id=PROJECT,
+            run_id=RUN,
+            parent=PARENT,
+            billing_account_name=BILLING,
+            enabled_services=[API],
+        )
+        with self.assertRaisesRegex(ProjectLifecycleError, "not configured"):
+            provider.authorize_actor(
+                "operator:project-reclaimer", "delete", PROJECT_TYPE
+            )
 
 
 if __name__ == "__main__":

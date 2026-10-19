@@ -57,8 +57,10 @@ reclamation. The reaper cannot change project IAM or delete the project-owned
 node identity; a separate project-reclaimer unlinks billing and deletes the exact
 project after the passed workload audit. Its ledger gate waits for the project
 GET to return 404 before recovery controls can be reclaimed. This is
-mock-tested source only: the operator lease is not bound to a verified cloud
-principal and no live project-deletion path is qualified.
+mock-tested source only: the controller verifies the named lease against a
+configured Google user principal and records its stable subject, but the GCS
+ledger writer is not yet wired to that same principal. No live project-deletion
+path is qualified.
 
 Both roots use local state paths under `.terraform/`. This is not runner-loss
 recovery. The candidate remote state bucket, separate private backup, durable

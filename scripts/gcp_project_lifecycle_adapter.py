@@ -14,6 +14,12 @@ import re
 from urllib.parse import quote, urlsplit
 
 from gcp_cleanup_adapter import TokenSource, Transport, UrllibTransport
+from gcp_token_identity import (
+    IdentityTransport,
+    IdentityVerificationError,
+    VerifiedGoogleUser,
+    verify_access_token_principal,
+)
 from recovery_controller import ProviderReceipt
 
 
@@ -61,6 +67,8 @@ class GCPProjectLifecycleAdapter:
         parent: str,
         billing_account_name: str,
         enabled_services: list[str],
+        identity_transport: IdentityTransport | None = None,
+        project_reclaimer_email: str | None = None,
         timeout: int = 30,
     ):
         if (
@@ -87,8 +95,14 @@ class GCPProjectLifecycleAdapter:
             raise ValueError("enabled services must be a sorted unique API allowlist")
         if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 60:
             raise ValueError("timeout must be between 1 and 60 seconds")
+        if (identity_transport is None) != (project_reclaimer_email is None):
+            raise ValueError(
+                "project reclaimer identity transport and email must be configured together"
+            )
         self._transport = transport
         self._token_source = token_source
+        self._identity_transport = identity_transport
+        self._project_reclaimer_email = project_reclaimer_email
         self._project_id = project_id
         self._run_id = run_id
         self._parent = parent
@@ -99,6 +113,17 @@ class GCPProjectLifecycleAdapter:
     @property
     def project_resource_id(self) -> str:
         return f"projects/{self._project_id}"
+
+    def authorize_actor(self, lease_owner, action, resource_type) -> VerifiedGoogleUser | None:
+        """Bind retirement lease use to its configured, verified Google user."""
+        if action != "delete" or resource_type not in {PROJECT_TYPE, BILLING_TYPE}:
+            return None
+        if lease_owner != "operator:project-reclaimer":
+            raise ProjectLifecycleError(
+                "project retirement requires the named project-reclaimer lease"
+            )
+        token = self._access_token()
+        return self._verify_project_reclaimer(token)
 
     def submit(self, action, resource_type, resource_id, request) -> ProviderReceipt:
         if not isinstance(request, dict):
@@ -131,7 +156,7 @@ class GCPProjectLifecycleAdapter:
             if action == "delete":
                 if request != {"billing_account_name": ""}:
                     raise ProjectLifecycleError("billing unlink must clear the account name")
-                return self._set_billing("")
+                return self._set_billing("", require_project_reclaimer=True)
             raise ProjectLifecycleError("billing action must create or delete")
         if resource_type == SERVICE_TYPE:
             match = re.fullmatch(
@@ -148,12 +173,29 @@ class GCPProjectLifecycleAdapter:
             return self._enable_service(service)
         raise ProjectLifecycleError("project lifecycle resource type is unsupported")
 
+    def inspect_resource_for_action(
+        self, action, resource_type, resource_id
+    ) -> ProviderReceipt:
+        require_project_reclaimer = (
+            action == "delete" and resource_type in {PROJECT_TYPE, BILLING_TYPE}
+        )
+        return self._inspect_resource(
+            resource_type, resource_id,
+            require_project_reclaimer=require_project_reclaimer,
+        )
+
     def inspect_resource(self, resource_type, resource_id) -> ProviderReceipt:
+        return self._inspect_resource(resource_type, resource_id)
+
+    def _inspect_resource(
+        self, resource_type, resource_id, *, require_project_reclaimer=False
+    ) -> ProviderReceipt:
         if resource_type == PROJECT_TYPE:
             if resource_id != self.project_resource_id:
                 raise ProjectLifecycleError("project inspection target does not match this run")
             status, payload = self._send(
-                "GET", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}"
+                "GET", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}",
+                require_project_reclaimer=require_project_reclaimer,
             )
             if status == 404:
                 return ProviderReceipt("absent", _digest({"status": 404}))
@@ -184,6 +226,7 @@ class GCPProjectLifecycleAdapter:
             status, payload = self._send(
                 "GET", CLOUD_BILLING,
                 f"/v1/{self.project_resource_id}/billingInfo",
+                require_project_reclaimer=require_project_reclaimer,
             )
             if status == 404:
                 return ProviderReceipt("absent", _digest({"status": 404}))
@@ -232,6 +275,7 @@ class GCPProjectLifecycleAdapter:
             status, payload = self._send(
                 "GET", RESOURCE_MANAGER,
                 f"/v3/operations/{quote(provider_name, safe='._~-')}",
+                require_project_reclaimer=True,
             )
             if status == 404:
                 raise ProjectLifecycleError("provider operation is no longer observable")
@@ -286,7 +330,8 @@ class GCPProjectLifecycleAdapter:
 
     def _delete_project(self) -> ProviderReceipt:
         status, project = self._send(
-            "GET", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}"
+            "GET", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}",
+            require_project_reclaimer=True,
         )
         if status == 404:
             return ProviderReceipt("absent", _digest({"status": 404}))
@@ -315,6 +360,7 @@ class GCPProjectLifecycleAdapter:
         billing_status, billing = self._send(
             "GET", CLOUD_BILLING,
             f"/v1/{self.project_resource_id}/billingInfo",
+            require_project_reclaimer=True,
         )
         if (
             billing_status != 200 or not isinstance(billing, dict)
@@ -327,7 +373,8 @@ class GCPProjectLifecycleAdapter:
             )
 
         status, payload = self._send(
-            "DELETE", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}"
+            "DELETE", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}",
+            require_project_reclaimer=True,
         )
         if status not in {200, 202} or not isinstance(payload, dict):
             raise ProjectLifecycleError(f"project deletion returned HTTP {status}")
@@ -335,11 +382,14 @@ class GCPProjectLifecycleAdapter:
             payload, RESOURCE_MANAGER, "resourcemanager-delete", operation_kind="delete"
         )
 
-    def _set_billing(self, billing_account_name: str) -> ProviderReceipt:
+    def _set_billing(
+        self, billing_account_name: str, *, require_project_reclaimer=False
+    ) -> ProviderReceipt:
         status, payload = self._send(
             "PUT", CLOUD_BILLING,
             f"/v1/{self.project_resource_id}/billingInfo",
             {"billingAccountName": billing_account_name},
+            require_project_reclaimer=require_project_reclaimer,
         )
         if status not in {200, 201} or not isinstance(payload, dict):
             raise ProjectLifecycleError(f"billing update returned HTTP {status}")
@@ -414,7 +464,8 @@ class GCPProjectLifecycleAdapter:
 
     def _inspect_project_deletion(self, operation_name: str) -> ProviderReceipt:
         status, payload = self._send(
-            "GET", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}"
+            "GET", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}",
+            require_project_reclaimer=True,
         )
         if status == 404:
             return ProviderReceipt("succeeded", _digest({"status": 404}), operation_name)
@@ -458,7 +509,10 @@ class GCPProjectLifecycleAdapter:
             raise ProjectLifecycleError("service target is outside this run allowlist")
         return match.group(1)
 
-    def _send(self, method: str, host: str, path: str, body=None):
+    def _send(
+        self, method: str, host: str, path: str, body=None, *,
+        require_project_reclaimer=False,
+    ):
         parsed = urlsplit(path)
         if (
             host not in {RESOURCE_MANAGER, CLOUD_BILLING, SERVICE_USAGE}
@@ -467,15 +521,9 @@ class GCPProjectLifecycleAdapter:
             or any(part in {"", ".", ".."} for part in parsed.path.split("/")[1:])
         ):
             raise ProjectLifecycleError("provider request target failed URL validation")
-        try:
-            token = self._token_source.access_token()
-        except Exception:
-            raise ProjectLifecycleError("short-lived access token is unavailable") from None
-        if (
-            not isinstance(token, str) or not token or token.strip() != token
-            or "\n" in token or "\r" in token
-        ):
-            raise ProjectLifecycleError("short-lived access token source returned invalid token")
+        token = self._access_token()
+        if require_project_reclaimer:
+            self._verify_project_reclaimer(token)
         try:
             response = self._transport.request(
                 method,
@@ -498,3 +546,34 @@ class GCPProjectLifecycleAdapter:
         except Exception:
             raise ProjectLifecycleError("GCP project lifecycle response was malformed") from None
         return response.status_code, payload
+
+    def _access_token(self) -> str:
+        try:
+            token = self._token_source.access_token()
+        except Exception:
+            raise ProjectLifecycleError("short-lived access token is unavailable") from None
+        if (
+            not isinstance(token, str) or not token or token.strip() != token
+            or "\n" in token or "\r" in token
+        ):
+            raise ProjectLifecycleError("short-lived access token source returned invalid token")
+        return token
+
+    def _verify_project_reclaimer(self, token: str) -> VerifiedGoogleUser:
+        if (
+            self._identity_transport is None
+            or self._project_reclaimer_email is None
+        ):
+            raise ProjectLifecycleError(
+                "project-reclaimer principal verification is not configured"
+            )
+        try:
+            return verify_access_token_principal(
+                self._identity_transport,
+                token,
+                expected_email=self._project_reclaimer_email,
+            )
+        except IdentityVerificationError:
+            raise ProjectLifecycleError(
+                "project-reclaimer Google principal could not be verified"
+            ) from None

@@ -132,6 +132,11 @@ class RecoveryController:
             ),
             None,
         )
+        authorize_actor = getattr(self.provider, "authorize_actor", None)
+        actor_id = None
+        if callable(authorize_actor) and action == "delete":
+            actor = authorize_actor(lease_owner, action, resource_type)
+            actor_id = getattr(actor, "auditor_id", actor if isinstance(actor, str) else None)
         snapshot = self.ledger.record_operation_intent(
             run_id,
             expected_generation=before.generation,
@@ -141,6 +146,7 @@ class RecoveryController:
             resource_type=resource_type,
             resource_id=resource_id,
             request_sha256=request_sha256,
+            actor_id=actor_id,
             now=self.clock(),
         )
         intent = next(
@@ -189,7 +195,13 @@ class RecoveryController:
                 prior_progress["provider_operation_name"]
             )
         else:
-            receipt = self.provider.inspect_resource(resource_type, resource_id)
+            inspect_for_action = getattr(
+                self.provider, "inspect_resource_for_action", None
+            )
+            if callable(inspect_for_action):
+                receipt = inspect_for_action(action, resource_type, resource_id)
+            else:
+                receipt = self.provider.inspect_resource(resource_type, resource_id)
 
         self._validate_receipt(receipt)
         if receipt.operation_name is None and prior_progress is not None:
