@@ -12,7 +12,7 @@ run "bootstrap_has_no_default_cloud_apply_roles" {
     error_message = "Bootstrap must not silently grant project apply privileges."
   }
   assert {
-    condition     = output.state_contract.backend == "local" && output.state_contract.retained == false && output.state_contract.artifact_upload == false
+    condition     = output.state_contract.backend == "gcs" && output.state_contract.bucket_owner == "externally-provisioned" && output.state_contract.backup_status == "unqualified" && output.state_contract.artifact_upload == false
     error_message = "Terraform state must be local to an ephemeral run workspace and never uploaded."
   }
   assert {

@@ -3,16 +3,17 @@
 The bootstrap Terraform root owns the persistent bootstrap/recovery project's
 GitHub federation, CI service account, reviewed project roles and cost/lifecycle
 alert scaffolding. The lab root owns each disposable run project's APIs, network,
-GKE, Config Sync Feature and run-specific node identity. Both backends are still
-local. CI validates these sources without credentials and never reads or applies
+GKE, Config Sync Feature and run-specific node identity. Both roots now declare
+partial GCS backends; CI validates with `-backend=false` and never reads or applies
 live state.
 
-**Isolation status (2026-10-18):** the Terraform resource ownership split now
-matches the one-project-per-run candidate, but project creation/billing,
-recovery Jobs/Schedulers, durable ledger, remote state/backup, per-run budgets
-and independent cleanup are not implemented. The current sources do not authorize
-an apply. No state migration is required: both configured backend state files
-were checked and contain zero managed resources.
+**Isolation status (2026-10-19):** the Terraform resource ownership split now
+matches the one-project-per-run candidate. Partial GCS backend declarations and
+a secret-free backend-config renderer are in source, but no state bucket,
+remote init, project creation/billing, recovery Jobs/Schedulers, durable ledger,
+backup integration, per-run budgets or independent cleanup path is qualified.
+The current sources do not authorize an apply. Before changing backend type, the
+earlier local state files were checked and contained zero managed resources.
 
 ## Identity contract
 
