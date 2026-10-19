@@ -294,7 +294,6 @@ class RunLedger:
         """Acquire an unheld/expired lease using an object-generation CAS."""
         self._validate_generation(expected_generation)
         at = now or self._clock()
-        at_text = _format_time(at)
         if not isinstance(owner, str) or not OWNER.fullmatch(owner):
             raise LedgerError("lease owner is unsupported")
         self._validate_ttl(ttl)

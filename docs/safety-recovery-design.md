@@ -390,6 +390,14 @@ history is never truncated; a full record stops mutation for operator review.
 The GCS object's generation returned by the provider is the authoritative
 generation token and is carried by the in-memory ledger snapshot, not guessed
 or copied into the object payload.
+This lease arbitrates manifest writers only; it does not fence an already-sent
+Google Cloud request. Before a recovery controller performs any resource
+operation, it must persist the exact operation intent and deterministic resource
+ID, recheck lease ownership immediately before the call, record the response, and
+reconcile unresolved requests by exact ID after takeover. Cleanup must keep
+retrying while a create/delete outcome is unresolved. Delayed provider responses
+and runner loss during those calls remain fake-provider acceptance cases; this
+ledger slice does not yet prove them.
 The current Terraform roots use local backends at
 `bootstrap/terraform/.terraform/ephemeral-bootstrap.tfstate` and
 `infrastructure/lab/.terraform/ephemeral-lab.tfstate`; those are not durable and
