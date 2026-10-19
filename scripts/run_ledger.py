@@ -520,8 +520,9 @@ class RunLedger:
         at = now or self._clock()
         current = self.read(run_id)
         self._require_active_lease(current, lease_owner, at)
+        phase = current.manifest["state"]
         op_id = operation_id(
-            run_id, attempt, action, resource_type, resource_id, request_sha256
+            run_id, attempt, action, resource_type, resource_id, request_sha256, phase
         )
         intent = {
             "kind": "intent",
@@ -531,6 +532,7 @@ class RunLedger:
             "resource_type": resource_type,
             "resource_id": resource_id,
             "request_sha256": request_sha256,
+            "phase": phase,
             "at": _format_time(at),
         }
         for event in current.manifest["operations"]:

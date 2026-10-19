@@ -121,6 +121,28 @@ class RunLedgerTests(unittest.TestCase):
             now=self.now,
         )
 
+    def lease_in_provisioning(self):
+        snapshot = self.create_and_lease()
+        states = [
+            "prepared", "project_create_requested", "project_created",
+            "billing_link_requested", "project_linked", "api_enablement",
+            "provisioning",
+        ]
+        for index, state in enumerate(states, start=1):
+            candidate = deepcopy(snapshot.manifest)
+            candidate["state"] = state
+            if state == "prepared":
+                for control in candidate["controls"]:
+                    control["status"] = "present"
+            snapshot = self.ledger.replace(
+                RUN_ID,
+                expected_generation=snapshot.generation,
+                lease_owner="launcher",
+                manifest=candidate,
+                now=self.now + timedelta(seconds=index),
+            )
+        return snapshot
+
     def test_object_path_is_exact_and_rejects_path_injection(self):
         self.assertEqual(object_name(RUN_ID), f"runs/{RUN_ID}/manifest.json")
         for invalid in ("../other", "lab-a/../../other", "LAB-UPPER", ""):
@@ -204,13 +226,13 @@ class RunLedgerTests(unittest.TestCase):
             )
 
     def test_operation_intent_precedes_result_and_retries_reconcile_exactly(self):
-        leased = self.create_and_lease()
+        leased = self.lease_in_provisioning()
         resource_id = f"projects/{self.intent['scope']['project_id']}/global/networks/{RUN_ID}-network"
         request_sha = "c" * 64
         op_id = operation_id(
-            RUN_ID, 1, "create", "gcp.compute.network", resource_id, request_sha
+            RUN_ID, 1, "create", "gcp.compute.network", resource_id, request_sha,
+            "provisioning",
         )
-        intent_at = self.now + timedelta(seconds=1)
         recorded = self.ledger.record_operation_intent(
             RUN_ID,
             expected_generation=leased.generation,
@@ -220,7 +242,7 @@ class RunLedgerTests(unittest.TestCase):
             resource_type="gcp.compute.network",
             resource_id=resource_id,
             request_sha256=request_sha,
-            now=intent_at,
+            now=self.now + timedelta(seconds=8),
         )
         self.assertEqual(recorded.manifest["operations"][0]["operation_id"], op_id)
         self.assertEqual(recorded.manifest["operations"][0]["kind"], "intent")
@@ -236,12 +258,11 @@ class RunLedgerTests(unittest.TestCase):
             resource_type="gcp.compute.network",
             resource_id=resource_id,
             request_sha256=request_sha,
-            now=intent_at,
+            now=self.now + timedelta(seconds=8),
         )
         self.assertEqual(replayed, recorded)
         self.assertEqual(len(replayed.manifest["operations"]), 1)
 
-        result_at = self.now + timedelta(seconds=2)
         resolved = self.ledger.record_operation_result(
             RUN_ID,
             expected_generation=recorded.generation,
@@ -249,7 +270,7 @@ class RunLedgerTests(unittest.TestCase):
             operation_id_value=op_id,
             outcome="reconciled_present",
             response_sha256="d" * 64,
-            now=result_at,
+            now=self.now + timedelta(seconds=9),
         )
         self.assertEqual(resolved.manifest["operations"][-1]["kind"], "result")
         retried_result = self.ledger.record_operation_result(
@@ -259,7 +280,7 @@ class RunLedgerTests(unittest.TestCase):
             operation_id_value=op_id,
             outcome="reconciled_present",
             response_sha256="d" * 64,
-            now=result_at,
+            now=self.now + timedelta(seconds=9),
         )
         self.assertEqual(retried_result, resolved)
         self.assertEqual(len(retried_result.manifest["operations"]), 2)
@@ -273,12 +294,12 @@ class RunLedgerTests(unittest.TestCase):
             resource_type="gcp.compute.network",
             resource_id=resource_id,
             request_sha256=request_sha,
-            now=self.now + timedelta(seconds=3),
+            now=self.now + timedelta(seconds=10),
         )
         self.assertNotEqual(next_attempt.manifest["operations"][-1]["operation_id"], op_id)
 
     def test_unresolved_operation_blocks_a_second_provider_attempt(self):
-        leased = self.create_and_lease()
+        leased = self.lease_in_provisioning()
         resource_id = f"projects/{self.intent['scope']['project_id']}/global/networks/{RUN_ID}-network"
         request_sha = "c" * 64
         recorded = self.ledger.record_operation_intent(
@@ -290,7 +311,7 @@ class RunLedgerTests(unittest.TestCase):
             resource_type="gcp.compute.network",
             resource_id=resource_id,
             request_sha256=request_sha,
-            now=self.now + timedelta(seconds=1),
+            now=self.now + timedelta(seconds=8),
         )
         with self.assertRaises(ContractError):
             self.ledger.record_operation_intent(
@@ -302,15 +323,15 @@ class RunLedgerTests(unittest.TestCase):
                 resource_type="gcp.compute.network",
                 resource_id=resource_id,
                 request_sha256=request_sha,
-                now=self.now + timedelta(seconds=2),
+                now=self.now + timedelta(seconds=9),
             )
 
     def test_takeover_reconciles_lost_create_response_by_exact_id(self):
         provider = FakeProvider()
-        leased = self.create_and_lease()
+        leased = self.lease_in_provisioning()
         resource_id = f"projects/{self.intent['scope']['project_id']}/global/networks/{RUN_ID}-network"
         request_sha = "c" * 64
-        intent_at = self.now + timedelta(seconds=1)
+        intent_at = self.now + timedelta(seconds=8)
         pending = self.ledger.record_operation_intent(
             RUN_ID,
             expected_generation=leased.generation,
@@ -326,7 +347,7 @@ class RunLedgerTests(unittest.TestCase):
             RUN_ID,
             expected_generation=pending.generation,
             owner="launcher",
-            now=self.now + timedelta(seconds=2),
+            now=self.now + timedelta(seconds=9),
         )
         self.assertEqual(checked, pending)
         with self.assertRaises(ConnectionError):

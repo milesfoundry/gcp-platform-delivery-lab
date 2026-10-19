@@ -168,8 +168,9 @@ class RunIntentTests(unittest.TestCase):
         candidate = intent()
         resource_id = f"projects/{PROJECT}/global/networks/{RUN_ID}-network"
         request_sha = "c" * 64
+        phase = "provisioning"
         op_id = operation_id(
-            RUN_ID, 1, "create", "gcp.compute.network", resource_id, request_sha
+            RUN_ID, 1, "create", "gcp.compute.network", resource_id, request_sha, phase
         )
         candidate["operations"] = [
             {
@@ -181,6 +182,7 @@ class RunIntentTests(unittest.TestCase):
                 "resource_type": "gcp.compute.network",
                 "resource_id": resource_id,
                 "request_sha256": request_sha,
+                "phase": phase,
                 "at": "2026-10-18T12:01:00Z",
             },
             {
@@ -205,22 +207,24 @@ class RunIntentTests(unittest.TestCase):
         candidate = intent()
         resource_id = f"projects/{PROJECT}/global/networks/{RUN_ID}-network"
         request_sha = "c" * 64
+        phase = "provisioning"
         first = {
             "sequence": 1,
             "kind": "intent",
             "operation_id": operation_id(
-                RUN_ID, 1, "create", "gcp.compute.network", resource_id, request_sha
+                RUN_ID, 1, "create", "gcp.compute.network", resource_id, request_sha, phase
             ),
             "attempt": 1,
             "action": "create",
             "resource_type": "gcp.compute.network",
             "resource_id": resource_id,
             "request_sha256": request_sha,
+            "phase": phase,
             "at": "2026-10-18T12:01:00Z",
         }
         second = dict(first, sequence=2, attempt=2, at="2026-10-18T12:02:00Z")
         second["operation_id"] = operation_id(
-            RUN_ID, 2, "create", "gcp.compute.network", resource_id, request_sha
+            RUN_ID, 2, "create", "gcp.compute.network", resource_id, request_sha, phase
         )
         candidate["operations"] = [first, second]
         with self.assertRaises(ContractError):

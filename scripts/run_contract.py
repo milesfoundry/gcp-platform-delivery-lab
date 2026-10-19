@@ -176,6 +176,7 @@ def operation_id(
     resource_type: str,
     resource_id: str,
     request_sha256: str,
+    phase: str,
 ) -> str:
     """Return the deterministic ID for one exact provider request attempt."""
     identity = {
@@ -185,6 +186,7 @@ def operation_id(
         "resource_type": resource_type,
         "resource_id": resource_id,
         "request_sha256": request_sha256,
+        "phase": phase,
     }
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return "op-" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -457,6 +459,7 @@ def _validate_operation_target(
     action: str,
     resource_type: str,
     resource_id: str,
+    phase: str,
     run_id: str,
     project_id: str,
 ) -> None:
@@ -468,6 +471,27 @@ def _validate_operation_target(
         raise ContractError("provider operation resource type is unsupported")
     if action not in {"create", "delete"}:
         raise ContractError("provider operation action must be create or delete")
+
+    if resource_type == "gcp.resourcemanager.project":
+        expected_phase = "project_create_requested" if action == "create" else "controls_reclaiming"
+        if phase != expected_phase:
+            raise ContractError("run project operation is invalid for this lifecycle phase")
+    elif resource_type == "gcp.billing.project_billing_info":
+        expected_phase = "billing_link_requested" if action == "create" else "controls_reclaiming"
+        if phase != expected_phase:
+            raise ContractError("billing operation is invalid for this lifecycle phase")
+    elif resource_type == "gcp.serviceusage.service":
+        allowed_phases = (
+            {"api_enablement"} if action == "create" else {"cleaning", "incomplete"}
+        )
+        if phase not in allowed_phases:
+            raise ContractError("API-service operation is invalid for this lifecycle phase")
+    else:
+        allowed_phases = (
+            {"provisioning"} if action == "create" else {"cleaning", "incomplete"}
+        )
+        if phase not in allowed_phases:
+            raise ContractError("workload resource operation is invalid for this lifecycle phase")
 
     if resource_type in {
         "gcp.resourcemanager.project",
@@ -530,7 +554,7 @@ def _validate_operations(
                 event,
                 {
                     "sequence", "kind", "operation_id", "attempt", "action",
-                    "resource_type", "resource_id", "request_sha256", "at",
+                    "resource_type", "resource_id", "request_sha256", "phase", "at",
                 },
                 f"operations[{index - 1}]",
             )
@@ -543,7 +567,12 @@ def _validate_operations(
             request_sha256 = event.get("request_sha256")
             if not isinstance(request_sha256, str) or not SHA256.fullmatch(request_sha256):
                 raise ContractError("operation request_sha256 must be a SHA-256 hex digest")
-            _validate_operation_target(action, resource_type, resource_id, run_id, project_id)
+            phase = event.get("phase")
+            if not isinstance(phase, str) or phase not in STATES:
+                raise ContractError("provider operation phase is unsupported")
+            _validate_operation_target(
+                action, resource_type, resource_id, phase, run_id, project_id
+            )
             target = (action, resource_type, resource_id)
             if target in pending_target:
                 raise ContractError("cannot issue a new provider request while the previous attempt is unresolved")
@@ -551,7 +580,7 @@ def _validate_operations(
             if attempt != expected_attempt:
                 raise ContractError("provider operation attempts must be consecutive")
             expected_id = operation_id(
-                run_id, attempt, action, resource_type, resource_id, request_sha256
+                run_id, attempt, action, resource_type, resource_id, request_sha256, phase
             )
             op_id = event.get("operation_id")
             if not isinstance(op_id, str) or not OPERATION_ID.fullmatch(op_id) or op_id != expected_id:
