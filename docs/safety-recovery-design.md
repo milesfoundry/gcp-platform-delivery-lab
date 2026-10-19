@@ -307,6 +307,7 @@ cross-boundary actions. Those remain qualification gates.
 | Reaper — GKE discovery and cleanup | `container.clusters.get/list/update/delete`; `container.nodePools.get/list/delete`; `container.operations.get/list`. `container.clusters.update` is needed for the reviewed deletion-protection transition. | Same disposable run project | No `container.clusters.getCredentials` and no Kubernetes credentials; no cluster create, IAM grant, or unrelated GKE feature mutation. Delete recorded node pools before the cluster; verify list/discovery behavior and whether update permissions can be scoped more narrowly. |
 | Reaper — Fleet / Config Sync run membership | `gkehub.memberships.get/list/delete`; `gkehub.membershipfeatures.get/list/delete`; `gkehub.operations.get/list` if asynchronous operations require polling | Same disposable run project, after confirming the membership and membership-feature resources inherit the run project boundary | Delete only the per-run `configmanagement` Feature after its membership is absent; never mutate Fleet or project IAM policies from the reaper. Verify provider calls and resource-level grantability. |
 | Reaper — per-run Config Sync Feature | `gkehub.features.get/delete`; `gkehub.operations.get/list` where deletion is asynchronous. `gkehub.features.create` belongs to the run provisioner, not reaper | Exact Feature in the disposable run project; remove only after membership feature and membership are absent | Never touch a feature in another project; verify provider API calls and project-level scope. The API parent is the project/location (`projects/*/locations/*`). |
+| Reaper — Pub/Sub workload resources | `pubsub.subscriptions.get/delete`; `pubsub.topics.get/delete` | Exact per-run topic/subscription IDs in the disposable project | Delete subscriptions before topics; Pub/Sub delete is a direct exact-resource REST request. Confirm the API project's full inventory and IAM boundary before live use. See [subscription delete](https://docs.cloud.google.com/pubsub/docs/reference/rest/v1/projects.subscriptions/delete) and [topic delete](https://docs.cloud.google.com/pubsub/docs/reference/rest/v1/projects.topics/delete). |
 | Reaper runtime — read/update durable manifest | At minimum `storage.objects.get` and the write permissions required by the selected JSON API method. Replacing an existing object can require `storage.objects.create` plus `storage.objects.delete`; metadata updates use `storage.objects.update`. Use generation-match preconditions on every state transition. | Conditional binding to the exact `runs/{run_id}/manifest.json` object in the recovery bucket, with uniform bucket-level access | Never grant `storage.objects.list`, bucket administration, object IAM policy, or access to other run paths. Confirm CAS method permissions and retention/versioning semantics in fake and isolated integration tests; retain closed generations for audit. |
 | Scheduler execution identity — trigger its reaper | `run.jobs.run` via `roles/run.invoker` bound to only the matching per-run Cloud Run Job | Job resource, Scheduler job and Scheduler service account all stay in the recovery project; use one invocation identity per run | No cleanup permissions and no invocation of any other reaper Job. Verify the Cloud Scheduler service-agent token-creation path, OAuth request, fixed request body, retries, and exact Job IAM binding end to end. |
 | Recovery-control provisioner — create per-run reaper | Cloud Run Job get/create/update/delete permissions (`run.jobs.get/create/update/delete`), `run.jobs.setIamPolicy` for only that Job, `iam.serviceAccounts.actAs` for its unique execution service account; Artifact Registry read on the reviewed image repository | Recovery project, Job resource, service account and image repository; separate short-lived provisioner authority | This control-plane identity is not the runtime identity. It must not be shared with the run cleanup identity or included in a run-project role. Verify exact image pull and Job create permissions using the selected deployment method. |
@@ -719,7 +720,8 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    resumes pending operations. Append-only generation-bound audit receipts are
    now part of the ledger contract, but external inventory discovery, billing/
    project checks, independently administered auditor identity, API-to-ledger
-   principal binding, and the real provider adapter remain open. The
+   principal binding, production wiring, and full resource-matrix adapter
+   coverage remain open. The
    ledger fake covers response-loss retries and CAS conflicts; extend
    fake-provider coverage now includes a create committed before a lost response,
    exact-ID reconciliation, idempotent cleanup after confirmed deletion, and
@@ -728,12 +730,13 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    cleanup also covers provider deletion followed by a lost response: takeover
    inspects the exact ID, records absence and does not submit a second delete.
    `scripts/gcp_cleanup_adapter.py` adds a deletion-only REST adapter for
-   Compute network/subnetwork/router/NAT, GKE node-pool/cluster, and Fleet
-   membership/feature resources. Its injectable transport and explicit short-
-   lived token source have local mock tests for exact target paths, URL and
-   project/run boundaries, long-running operation scope, router fingerprint
-   updates, and an exact-cluster protection review gate. It cannot create
-   resources; unsupported Pub/Sub/Storage types fail closed. The adapter is not
+   Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GKE
+   node-pool/cluster, and Fleet membership/feature resources. Its injectable
+   transport and explicit short-lived token source have local mock tests for
+   exact target paths, URL and project/run boundaries, long-running operation
+   scope, router fingerprint updates, and an exact-cluster protection review
+   gate. It cannot create
+   resources; Storage object deletion remains unsupported. The adapter is not
    wired to `RecoveryController`, a deployed identity or a live provider. The
    cluster gate is only an external predicate; it does not inspect or disable
    GKE deletion protection. Independently discovered inventory, API-to-ledger

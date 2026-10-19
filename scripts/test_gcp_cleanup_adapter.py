@@ -129,6 +129,37 @@ class GCPCleanupAdapterTests(unittest.TestCase):
             )
         self.assertEqual(transport.calls, [])
 
+    def test_pubsub_topic_and_subscription_delete_exact_run_project_resources(self):
+        topic_id = f"projects/{PROJECT}/topics/{RUN}-topic"
+        subscription_id = f"projects/{PROJECT}/subscriptions/{RUN}-subscription"
+        transport = FakeTransport([FakeResponse(200), FakeResponse(200, {})])
+        provider = adapter(transport)
+
+        topic_result = provider.submit("delete", "gcp.pubsub.topic", topic_id, {})
+        subscription_result = provider.submit(
+            "delete", "gcp.pubsub.subscription", subscription_id, {}
+        )
+
+        self.assertEqual(topic_result.state, "succeeded")
+        self.assertEqual(subscription_result.state, "succeeded")
+        self.assertEqual(
+            [call[1] for call in transport.calls],
+            [
+                f"https://pubsub.googleapis.com/v1/{topic_id}",
+                f"https://pubsub.googleapis.com/v1/{subscription_id}",
+            ],
+        )
+
+        foreign = FakeTransport([])
+        with self.assertRaisesRegex(CleanupAdapterError, "outside the exact run project"):
+            adapter(foreign).submit(
+                "delete",
+                "gcp.pubsub.topic",
+                f"projects/other-lab-456/topics/{RUN}-topic",
+                {},
+            )
+        self.assertEqual(foreign.calls, [])
+
     def test_cluster_delete_requires_exact_protection_review(self):
         resource_id = (
             f"projects/{PROJECT}/locations/europe-west2/clusters/{RUN}"
@@ -187,8 +218,8 @@ class GCPCleanupAdapterTests(unittest.TestCase):
 
         with self.assertRaisesRegex(CleanupAdapterError, "no qualified cleanup mapping"):
             adapter(FakeTransport([])).submit(
-                "delete", "gcp.pubsub.topic",
-                f"projects/{PROJECT}/topics/{RUN}", {},
+                "delete", "gcp.storage.object",
+                f"gs://{RUN}-bucket/object@12345", {},
             )
 
     def test_create_and_cross_project_delete_are_rejected_without_requests(self):
@@ -213,6 +244,9 @@ class GCPCleanupAdapterTests(unittest.TestCase):
             f"projects/{PROJECT}/global/networks/{RUN}%2Fother",
             f"https://user@compute.googleapis.com/compute/v1/projects/{PROJECT}/"
             f"global/networks/{RUN}",
+            f"https://compute.googleapis.com:invalid/compute/v1/projects/{PROJECT}/"
+            f"global/networks/{RUN}",
+            None,
         ]
         for resource_id in unsafe_ids:
             with self.subTest(resource_id=resource_id):

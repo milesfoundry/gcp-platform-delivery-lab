@@ -31,6 +31,8 @@ SUPPORTED_TYPES = frozenset(
         "gcp.compute.subnetwork",
         "gcp.compute.router",
         "gcp.compute.router_nat",
+        "gcp.pubsub.topic",
+        "gcp.pubsub.subscription",
         "gcp.gke.node_pool",
         "gcp.gke.cluster",
         "gcp.gkehub.feature_membership",
@@ -43,6 +45,7 @@ GOOGLE_HOSTS = frozenset(
         "compute.googleapis.com",
         "container.googleapis.com",
         "gkehub.googleapis.com",
+        "pubsub.googleapis.com",
         "www.googleapis.com",
     }
 )
@@ -134,11 +137,19 @@ def _fingerprint(value: object) -> str:
 
 
 def _segments(resource_id: str, resource_type: str) -> tuple[str, ...]:
+    if not isinstance(resource_id, str) or not resource_id:
+        raise CleanupAdapterError("resource ID must be a non-empty string")
     parsed = urlsplit(resource_id)
     if parsed.scheme:
         if parsed.scheme != "https" or parsed.hostname not in GOOGLE_HOSTS:
             raise CleanupAdapterError("resource ID is outside the Google API allowlist")
-        if parsed.username or parsed.password or parsed.port or parsed.query or parsed.fragment:
+        try:
+            has_unsupported_authority = bool(
+                parsed.username or parsed.password or parsed.port
+            )
+        except ValueError:
+            raise CleanupAdapterError("resource ID contains an invalid URL port") from None
+        if has_unsupported_authority or parsed.query or parsed.fragment:
             raise CleanupAdapterError("resource ID contains unsupported URL components")
         path = parsed.path
         if parsed.hostname == "www.googleapis.com":
@@ -152,6 +163,10 @@ def _segments(resource_id: str, resource_type: str) -> tuple[str, ...]:
         elif parsed.hostname == "container.googleapis.com":
             if not path.startswith("/v1/"):
                 raise CleanupAdapterError("GKE resource ID has an unsupported API path")
+            path = path[len("/v1/"):]
+        elif parsed.hostname == "pubsub.googleapis.com":
+            if not path.startswith("/v1/"):
+                raise CleanupAdapterError("Pub/Sub resource ID has an unsupported API path")
             path = path[len("/v1/"):]
         else:
             version = next(
@@ -204,6 +219,14 @@ def _resource_path(resource_type: str, resource_id: str, project_id: str, run_id
             raise CleanupAdapterError("router NAT resource name is malformed")
         router = "/".join(parts[:6])
         return "compute.googleapis.com", f"/compute/v1/{router}", parts[7]
+    if resource_type == "gcp.pubsub.topic":
+        if len(parts) != 4 or parts[2] != "topics":
+            raise CleanupAdapterError("Pub/Sub topic resource name is malformed")
+        return "pubsub.googleapis.com", f"/v1/{'/'.join(parts)}", "pubsub"
+    if resource_type == "gcp.pubsub.subscription":
+        if len(parts) != 4 or parts[2] != "subscriptions":
+            raise CleanupAdapterError("Pub/Sub subscription resource name is malformed")
+        return "pubsub.googleapis.com", f"/v1/{'/'.join(parts)}", "pubsub"
     if resource_type == "gcp.gke.cluster":
         if len(parts) != 6 or parts[2] != "locations" or parts[3] != "europe-west2" or parts[4] != "clusters":
             raise CleanupAdapterError("GKE cluster resource name is malformed")
@@ -291,6 +314,8 @@ class GCPCleanupAdapter:
             return ProviderReceipt("succeeded", _fingerprint({"status": response.status_code}))
         if not isinstance(payload, dict):
             raise CleanupAdapterError("provider delete returned malformed JSON")
+        if not payload:
+            return ProviderReceipt("succeeded", _fingerprint(payload))
         api_version = "v1" if host == "compute.googleapis.com" else self._api_version(path)
         receipt = self._operation_receipt(host, payload, api_version=api_version)
         if receipt.state == "running":

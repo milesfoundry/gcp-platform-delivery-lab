@@ -31,16 +31,17 @@ complete; only a terminal result resolves an intent. The credential-free
 `recovery_controller.py` submits once or resumes by polling/inspecting through
 an injected provider adapter, and can run ordered cleanup against that adapter.
 `gcp_cleanup_adapter.py` now implements a deletion-only adapter for exact
-Compute network/subnetwork/router/NAT, GKE node-pool/cluster, and GKE Fleet
-membership/feature resources. It requires an explicitly supplied short-lived
-token source and transport; it does not discover credentials. Mocked tests cover
-request paths, project/run boundaries, async-operation scope, router fingerprint
-updates, and the cluster-protection review gate. The adapter has not been wired
+Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GKE
+node-pool/cluster, and GKE Fleet membership/feature resources. It requires an
+explicitly supplied short-lived token source and transport; it does not discover
+credentials. Mocked tests cover request paths, project/run boundaries,
+async-operation scope, router fingerprint updates, and the cluster-protection
+review gate. The adapter has not been wired
 to the ledger controller or deployed identities. Its cluster review callback is
 an external gate, not proof that API deletion protection was disabled.
-Independent provider discovery/audit, unsupported Pub/Sub/Storage cleanup,
-API-to-ledger principal binding, IAM isolation and live provider behavior remain
-unqualified. No cloud resource creation is authorized by these files.
+Independent provider discovery/audit, Storage object cleanup, API-to-ledger
+principal binding, IAM isolation and live provider behavior remain unqualified.
+No cloud resource creation is authorized by these files.
 Fake controller tests cover a create committed before a lost response,
 cross-run project-ID rejection before provider access, and repeated cleanup
 after a confirmed delete without a second delete call. These verify the local
