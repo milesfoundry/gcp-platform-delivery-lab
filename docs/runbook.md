@@ -47,9 +47,13 @@ to `cleaning`, follows the manifest's reverse dependency order, resumes the same
 pending delete after takeover, and stops on the first failed, running or
 unresolved operation. A run cannot start a new create at or after its fixed
 deadline; an already-persisted create remains reconcilable. Provider attempts
-are capped at three, after which cleanup records `incomplete`. Independent
-discovery/audit, control reclamation and a real provider adapter remain
-unimplemented.
+are capped at three, after which cleanup records `incomplete`. Fake controller
+tests cover create and delete response loss, cross-run project-ID rejection
+before provider access, and repeated cleanup after a confirmed delete without a
+second delete call. These verify the local ledger/controller contract only;
+they do not establish Google IAM isolation or real provider behavior.
+Independent discovery/audit, control reclamation and a real provider adapter
+remain unimplemented.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources

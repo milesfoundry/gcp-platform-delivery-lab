@@ -21,6 +21,7 @@ class FakeOperationProvider:
         self.submit_receipt = ProviderReceipt("running", "a" * 64, self.operation_name())
         self.poll_receipt = ProviderReceipt("succeeded", "b" * 64, self.operation_name())
         self.lose_create_response = False
+        self.lose_delete_response = False
         self.create_before_loss = True
         self.lookup_receipt = None
 
@@ -34,7 +35,9 @@ class FakeOperationProvider:
             self.resources.add(resource_id)
         elif action == "delete":
             self.resources.discard(resource_id)
-        if self.lose_create_response:
+        if (
+            action == "create" and self.lose_create_response
+        ) or (action == "delete" and self.lose_delete_response):
             raise ConnectionError("simulated lost provider response")
         return self.submit_receipt
 
@@ -207,6 +210,37 @@ class RecoveryControllerTests(unittest.TestCase):
         )
         self.assertEqual(repeated_snapshot, snapshot)
         self.assertEqual(repeated_executions, [])
+        self.assertEqual(len(self.provider.submit_calls), 1)
+
+    def test_lost_delete_response_reconciles_absence_without_resubmitting(self):
+        current = self.ledger.read(RUN_ID)
+        candidate = deepcopy(current.manifest)
+        candidate["state"] = "teardown_requested"
+        candidate["resources"][0]["status"] = "present"
+        self.provider.resources.add(self.resource_id)
+        self.provider.lose_delete_response = True
+        self.ledger.replace(
+            RUN_ID,
+            expected_generation=current.generation,
+            lease_owner="launcher",
+            manifest=candidate,
+            now=self.now + timedelta(seconds=30),
+        )
+        self.controller.clock = lambda: self.now + timedelta(seconds=40)
+
+        with self.assertRaisesRegex(ConnectionError, "lost provider response"):
+            self.controller.cleanup(RUN_ID, lease_owner="launcher")
+        self.assertNotIn(self.resource_id, self.provider.resources)
+        self.assertEqual(len(self.provider.submit_calls), 1)
+
+        snapshot, executions = self.controller.cleanup(
+            RUN_ID, lease_owner="launcher"
+        )
+        self.assertEqual([item.state for item in executions], ["reconciled_absent"])
+        self.assertEqual(snapshot.manifest["resources"][0]["status"], "deleted")
+        self.assertEqual(self.provider.lookups, [
+            ("gcp.compute.network", self.resource_id)
+        ])
         self.assertEqual(len(self.provider.submit_calls), 1)
 
     def test_provider_call_requires_a_fresh_active_lease_check(self):
