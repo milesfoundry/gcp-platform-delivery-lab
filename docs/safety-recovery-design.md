@@ -21,11 +21,36 @@ clean only the corresponding run project and access only its known ledger object
 path. A shared reaper execution identity is disallowed because it would
 accumulate access to every run project.
 
+### Per-run identity permission boundary
+
+These are source-verified permission candidates for the Terraform packet, not
+an applied or qualified IAM policy. The reaper receives no project-creator,
+project-IAM-admin, billing-account-admin, Cloud Run deployer, Scheduler admin,
+or recovery-control deletion role.
+
+| Principal | Candidate grant | Resource boundary and qualification |
+| --- | --- | --- |
+| Per-run reaper Job identity | `storage.objects.get`, `storage.objects.create`, `storage.objects.delete` in a recovery-project custom role | Bind on the private ledger bucket with uniform bucket-level access and an IAM Condition requiring the exact `runs/{run_id}/manifest.json` object resource name. Do not grant `storage.objects.list`; GCS does not filter list results by object-name conditions. Replacing a generation-matched ledger object requires both create and delete permissions. |
+| Per-run reaper Job identity | `resourcemanager.projects.get`, `resourcemanager.projects.deleteBillingAssignment`, `resourcemanager.projects.delete` | Define a project-level custom role in the disposable project and bind it only on that project. Confirm all three permissions are supported in custom roles in the target organization before activation. The role disappears with its project. Do not grant at the folder or organization. |
+| Per-run Scheduler invocation identity | `roles/run.invoker` | Bind with `google_cloud_run_v2_job_iam_member` on only the matching Job. Use an OAuth token for the `run.googleapis.com` Jobs API; the invocation account must be in the Scheduler project. It cannot pass execution overrides. |
+| Trusted run/bootstrap operator | `iam.serviceAccounts.actAs` on the two per-run identities and policy-writing permissions for the exact resource policies | This identity creates the recovery controls and binds the run-project role. It is separate from both runtime identities and is not available to either job. |
+
+Google documents the exact project permissions for [project deletion](https://docs.cloud.google.com/resource-manager/reference/rest/v3/projects/delete), [billing unlink](https://docs.cloud.google.com/billing/docs/how-to/modify-project), and [billing-info reads](https://docs.cloud.google.com/billing/docs/reference/rest/v1/projects/getBillingInfo). Cloud Storage object replacement requires create and delete, and an object-name IAM Condition requires uniform bucket-level access ([Storage IAM permissions](https://docs.cloud.google.com/storage/docs/access-control/iam-permissions), [Storage IAM Conditions](https://docs.cloud.google.com/storage/docs/access-control/iam)). Cloud Run Jobs support job-level invoker bindings ([Terraform IAM resource](https://registry.terraform.io/providers/hashicorp/google/8.5.0/docs/resources/cloud_run_v2_job_iam)).
+
 This is a design candidate, not a qualified service or cloud-ready permission
 set. The Scheduler and invocation account share the persistent recovery project;
 the target is the Google Cloud Run Jobs API endpoint, which uses OAuth. Qualify
 the exact request, token, job-level invoker binding, retry behavior and API
-enablement end to end. Keep Terraform state in a private per-run GCS bucket in the recovery project,
+enablement end to end. The Scheduler trigger must be recurrent through the
+post-deadline audit and retirement window, not a one-shot expiry trigger:
+`jobs.run` dispatches a Cloud Run Job execution, while this entrypoint can exit
+successfully without mutation when the durable state is not yet eligible. Keep
+the trigger until the independent closure audit permits control reclamation;
+the ledger lease prevents concurrent invocations from submitting duplicate
+operations. See Google's [Cloud Run Job execution
+API](https://docs.cloud.google.com/run/docs/execute/jobs) and [Cloud Scheduler
+run method](https://docs.cloud.google.com/scheduler/docs/reference/rest/v1/projects.locations.jobs/run).
+Keep Terraform state in a private per-run GCS bucket in the recovery project,
 separate from the manifest ledger, and retain it through ordinary teardown and
 independent audit. The reaper acts from the durable run
 record and provider APIs, never Terraform state, so runner/state loss does not

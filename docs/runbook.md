@@ -117,15 +117,22 @@ identity transport through GCS and provider requests; credential sourcing,
 control reclamation and live provider qualification remain open.
 
 `gcp_reaper_entrypoint.py` is the source-level Cloud Run Job entrypoint for the
-final project-retirement phase. Its fixed per-run environment is checked against
-the exact durable manifest before lease acquisition. It will not act before
-the manifest deadline, before a passed independent workload audit, or outside
-`project_retiring` (with a narrowly resumable prior retirement recorded as
-`incomplete`). It unlinks the declared billing account before deleting the
-exact project and leaves recovery-control reclamation to a separate closure
-audit. This does not perform workload cleanup, collect independent evidence,
-provision a Job/Scheduler, or establish IAM. It is source-only and fake-tested;
-no live Cloud Run or GCP identity qualification has occurred.
+final project-retirement phase. It checks the run, project, recovery project,
+API allowlist, billing account and reaper email against the durable manifest
+before lease acquisition. The parent, ledger bucket, token audience, service
+account numeric ID and container image remain deployment trust anchors; the
+Job template must be locked down and independently checked when IAM/deployment
+source is added. The entrypoint will not act before the manifest deadline,
+before a passed independent workload audit, or outside `project_retiring` (with
+a narrowly resumable prior retirement recorded as `incomplete`). It unlinks
+the declared billing account before deleting the exact project and leaves
+recovery-control reclamation to a separate closure audit. The Scheduler must
+invoke it repeatedly through the audit/retirement window: a single Cloud Run
+Job dispatch can complete successfully while this program safely does no work
+because the ledger is not yet eligible. This does not perform workload cleanup,
+collect independent evidence, provision a Job/Scheduler, or establish IAM. It
+is source-only and fake-tested; no live Cloud Run or GCP identity qualification
+has occurred.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources
