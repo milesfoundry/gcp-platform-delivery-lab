@@ -136,3 +136,22 @@ jobs:
           kubectl kustomize gitops/platform > /tmp/platform.yaml
           kubectl kustomize gitops/apps/report > /tmp/app.yaml
           python3 scripts/check-ownership.py
+  reaper-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build the pinned runtime image
+        run: docker build --pull -f recovery/reaper/Dockerfile -t portfolio-reaper:validate .
+      - name: Check non-root startup and fail-closed configuration
+        run: |
+          docker run --rm --entrypoint python portfolio-reaper:validate -c 'import os; assert os.getuid() == 65532'
+          docker run --rm --entrypoint python portfolio-reaper:validate -c 'from gcp_reaper_entrypoint import main, ReaperEntrypointError
+          try:
+              main({})
+          except ReaperEntrypointError:
+              pass
+          else:
+              raise AssertionError("missing configuration must fail")'

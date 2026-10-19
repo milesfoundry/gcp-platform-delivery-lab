@@ -4,15 +4,18 @@ This root manages one run's Cloud Run retirement Job, recurring Cloud Scheduler
 trigger, service accounts, and conditional manifest-object access in the
 persistent recovery project. It must use a private, per-run GCS state bucket
 separate from the manifest ledger. Create a private `backend.hcl` from
-`backend.hcl.example` and initialize with `terraform init
--backend-config=backend.hcl`; never initialize this root with local state.
+`backend.hcl.example` and initialize with
+`terraform init -backend-config=backend.hcl`; never initialize this root with
+local state.
 
 ## Required ordering
 
 1. Review the recovery project, exact target project ID, parent, billing
    account, API allowlist, independent audit path, immutable image digest, and
-   private state bucket. Verify the ledger bucket is in the recovery project
-   and has uniform bucket-level access enabled.
+   private state bucket. The digest must identify the public
+   `ghcr.io/OWNER/gcp-reaper` package until an Artifact Registry remote
+   repository is provisioned for private GHCR access. Verify the ledger bucket
+   is in the recovery project and has uniform bucket-level access enabled.
 2. Create the durable `control_bootstrapping` manifest and exact ledger object
    before applying this root. Apply with
    `enable_project_retirement_iam = false`; this creates the Job and recurring

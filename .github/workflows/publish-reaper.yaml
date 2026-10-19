@@ -1,0 +1,79 @@
+name: Reaper image
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Immutable image release tag (for example v1.0.0)
+        required: true
+        type: string
+      publish:
+        description: Publish to GHCR with build provenance and SBOM
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  validate-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build the pinned runtime image
+        run: docker build --pull -f recovery/reaper/Dockerfile -t portfolio-reaper:validate .
+      - name: Check non-root startup and fail-closed configuration
+        run: |
+          docker run --rm --entrypoint python portfolio-reaper:validate -c 'import os; assert os.getuid() == 65532'
+          docker run --rm --entrypoint python portfolio-reaper:validate -c 'from gcp_reaper_entrypoint import main, ReaperEntrypointError
+          try:
+              main({})
+          except ReaperEntrypointError:
+              pass
+          else:
+              raise AssertionError("missing configuration must fail")'
+
+  publish-image:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: [validate-image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Validate release ref and version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main || { echo "Publish only from main" >&2; exit 1; }
+          [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Version must be vMAJOR.MINOR.PATCH" >&2; exit 1; }
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Publish linux/amd64 image with provenance and SBOM
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/gcp-reaper"
+          docker buildx create --use --name portfolio-reaper
+          docker buildx build \
+            --platform linux/amd64 \
+            --file recovery/reaper/Dockerfile \
+            --build-arg "VCS_REF=$SOURCE_REVISION" \
+            --tag "$image:$RELEASE_VERSION" \
+            --provenance=mode=max \
+            --sbom=true \
+            --metadata-file /tmp/reaper-build-metadata.json \
+            --push .
+          digest="$(jq -r '.["containerimage.digest"]' /tmp/reaper-build-metadata.json)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "Published image: `$image@$digest`" >> "$GITHUB_STEP_SUMMARY"

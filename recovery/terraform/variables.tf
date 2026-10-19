@@ -42,8 +42,8 @@ variable "reaper_image_digest" {
   description = "Reviewed immutable reaper container image reference. Mutable tags are rejected."
   type        = string
   validation {
-    condition     = can(regex("^.+@sha256:[0-9a-f]{64}$", var.reaper_image_digest))
-    error_message = "reaper_image_digest must be an immutable image reference pinned by SHA-256 digest."
+    condition     = can(regex("^ghcr\\.io/[a-z0-9-]+/gcp-reaper@sha256:[0-9a-f]{64}$", var.reaper_image_digest))
+    error_message = "reaper_image_digest must be a GHCR gcp-reaper image pinned by SHA-256 digest."
   }
 }
 
