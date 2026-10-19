@@ -103,6 +103,7 @@ class GCPProjectLifecycleAdapter:
         self._token_source = token_source
         self._identity_transport = identity_transport
         self._project_reclaimer_email = project_reclaimer_email
+        self._project_reclaimer_subject = None
         self._project_id = project_id
         self._run_id = run_id
         self._parent = parent
@@ -568,7 +569,7 @@ class GCPProjectLifecycleAdapter:
                 "project-reclaimer principal verification is not configured"
             )
         try:
-            return verify_access_token_principal(
+            principal = verify_access_token_principal(
                 self._identity_transport,
                 token,
                 expected_email=self._project_reclaimer_email,
@@ -577,3 +578,12 @@ class GCPProjectLifecycleAdapter:
             raise ProjectLifecycleError(
                 "project-reclaimer Google principal could not be verified"
             ) from None
+        if (
+            self._project_reclaimer_subject is not None
+            and principal.auditor_id != self._project_reclaimer_subject
+        ):
+            raise ProjectLifecycleError(
+                "project-reclaimer Google subject changed during the run"
+            )
+        self._project_reclaimer_subject = principal.auditor_id
+        return principal

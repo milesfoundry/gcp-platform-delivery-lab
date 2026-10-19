@@ -281,9 +281,11 @@ the project lifecycle adapter to verify that caller's Google user token through
 UserInfo. The verified `sub` is recorded in the operation intent, and every
 teardown API request rechecks the configured expected email before using its
 bearer token. Only human user tokens with verified email are supported. The
-deployed runtime must still prove that its GCS ledger writer uses the same
-expected principal; provider and ledger code are not wired together yet. This
-path is fake-tested source, not authorized or qualified for live use. For cost
+GCS ledger adapter now requires an explicit token source, expected email and
+stable Google subject, and verifies them before every storage API request. The
+trusted runtime must still wire that exact token source and principal to both
+provider and ledger adapters. This path is fake-tested source, not authorized
+or qualified for live use. For cost
 monitoring, the Budget API can scope an alerts-only budget to one project under
 the billing account, while Google recommends keeping
 programmatic budget-notification topics in a FinOps administration project.
@@ -574,9 +576,10 @@ Required manifest fields:
   auditor refreshes inventory, and the reaper reacquires its lease before
   resuming. Unsupported or unowned findings are fingerprinted but excluded
   from deletion and must still be absent for the final audit to pass. This is
-  fake-tested source only: the Google principal is not cryptographically bound
-  to the ledger writer, and collector, ledger and mutation adapter are not
-  connected in a deployed runtime. See Google's
+  fake-tested source only: the GCS writer verifies an explicit token source
+  against the expected email and stable subject before each request, but the
+  collector, ledger and mutation adapter are not connected in a deployed
+  runtime. See Google's
   [OpenID Connect UserInfo endpoint](https://developers.google.com/identity/openid-connect/reference#userinfo)
   and [token types](https://docs.cloud.google.com/docs/authentication/token-types).
   `scripts/gcp_project_lifecycle_adapter.py` supports exact-ID project creation
@@ -597,9 +600,9 @@ Required manifest fields:
   The v3 Project schema uses `displayName` and `state`; the Billing API request
   sends only writable `billingAccountName`, omitting output-only fields.
   The adapter is not deployed or wired to a trusted launcher, and does not solve
-  creator Owner grants, billing-budget preflight, or independent
-  binding between the GCS ledger writer and the configured project-reclaimer
-  principal. It remains unqualified for live use. Google
+  creator Owner grants, billing-budget preflight, or trusted runtime wiring
+  between the GCS ledger writer and the configured project-reclaimer principal.
+  It remains unqualified for live use. Google
   documents project creation as a separate asynchronous operation
   from billing association; billing association can enable charges. See the
   [projects.create API](https://docs.cloud.google.com/resource-manager/reference/rest/v3/projects/create),
@@ -781,8 +784,8 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    project/billing, audit and control-reclamation roles. Ordered cleanup now
    resumes pending operations. Append-only generation-bound audit receipts are
    now part of the ledger contract, but external inventory discovery, billing/
-   project checks, independently administered auditor identity, API-to-ledger
-   principal binding, production wiring, and full resource-matrix adapter
+   project checks, independently administered auditor identity, runtime wiring
+   of the principal-bound ledger client, production wiring, and full resource-matrix adapter
    coverage remain open. The
    ledger fake covers response-loss retries and CAS conflicts; extend
    fake-provider coverage now includes a create committed before a lost response,
@@ -810,7 +813,8 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    state. The Google provider's `deletion_protection` is a Terraform-side guard,
    not an API setting; the REST adapter's review gate is the deletion control on
    that path. Dynamic inventory registration now has a bounded ledger contract
-   and fake-tested auditor handoff. Auditor/API principal binding, actual IAM
+   and fake-tested auditor handoff. Trusted runtime auditor/API principal
+   binding, actual IAM
    isolation, remote state/backup and lifecycle deployment remain open.
 6. `.github/workflows/validate.yaml` remains credential-free for CI and runs
    schema, Terraform-render, cleanup, state, and negative-boundary checks. Add

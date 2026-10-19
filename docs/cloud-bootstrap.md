@@ -58,8 +58,10 @@ node identity; a separate project-reclaimer unlinks billing and deletes the exac
 project after the passed workload audit. Its ledger gate waits for the project
 GET to return 404 before recovery controls can be reclaimed. This is
 mock-tested source only: the controller verifies the named lease against a
-configured Google user principal and records its stable subject, but the GCS
-ledger writer is not yet wired to that same principal. No live project-deletion
+configured Google user principal and records its stable subject. The GCS writer
+now requires an explicit token source, expected email and stable subject, and
+verifies them before every storage request. No trusted runtime yet wires the
+same token source and principal into both adapters, so no live project-deletion
 path is qualified.
 
 Both roots use local state paths under `.terraform/`. This is not runner-loss

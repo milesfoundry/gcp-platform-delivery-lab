@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -34,6 +35,12 @@ class IdentityTransport(Protocol):
         timeout: int,
         allow_redirects: bool,
     ) -> Response: ...
+
+
+class AccessTokenSource(Protocol):
+    """Source of short-lived Google OAuth access tokens."""
+
+    def access_token(self) -> str: ...
 
 
 USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
@@ -61,7 +68,13 @@ def verify_access_token_principal(
     Google HTTPS UserInfo endpoint. Redirects are disabled and transport
     exceptions are suppressed so the credential cannot appear in error text.
     """
-    if not isinstance(access_token, str) or not access_token.strip():
+    if (
+        not isinstance(access_token, str)
+        or not access_token
+        or access_token.strip() != access_token
+        or "\n" in access_token
+        or "\r" in access_token
+    ):
         raise IdentityVerificationError("an explicit non-empty access token is required")
     if (not isinstance(expected_email, str)
             or PRINCIPAL_EMAIL.fullmatch(expected_email) is None):
@@ -103,3 +116,66 @@ def verify_access_token_principal(
     if not isinstance(subject, str) or SUBJECT.fullmatch(subject) is None:
         raise IdentityVerificationError("Google UserInfo subject is missing or malformed")
     return VerifiedGoogleUser(auditor_id=f"google-user-{subject}", email=email)
+
+
+def verified_google_credentials(
+    token_source: AccessTokenSource,
+    identity_transport: IdentityTransport,
+    *,
+    expected_email: str,
+    expected_auditor_id: str,
+):
+    """Create Google auth credentials that verify identity before every request.
+
+    Google client libraries call ``before_request`` on credentials immediately
+    before sending each HTTP request. Refreshing from the injected source and
+    verifying UserInfo here binds a storage API request to the same configured
+    principal even when a token source rotates tokens between calls.
+    """
+    if (
+        not isinstance(expected_email, str)
+        or PRINCIPAL_EMAIL.fullmatch(expected_email) is None
+    ):
+        raise IdentityVerificationError("expected Google user email is malformed")
+    if (
+        not isinstance(expected_auditor_id, str)
+        or re.fullmatch(r"google-user-[A-Za-z0-9._~-]{1,255}", expected_auditor_id)
+        is None
+    ):
+        raise IdentityVerificationError("expected Google user subject is malformed")
+    try:
+        from google.auth.credentials import Credentials
+    except ImportError as exc:
+        raise IdentityVerificationError("google-auth is required for GCP API access") from exc
+
+    class PrincipalBoundCredentials(Credentials):
+        def __init__(self):
+            super().__init__()
+            self.token = None
+            self.expiry = None
+
+        def refresh(self, request):
+            try:
+                token = token_source.access_token()
+            except Exception:
+                raise IdentityVerificationError(
+                    "short-lived access token is unavailable"
+                ) from None
+            principal = verify_access_token_principal(
+                identity_transport, token, expected_email=expected_email
+            )
+            if principal.auditor_id != expected_auditor_id:
+                raise IdentityVerificationError(
+                    "access token subject does not match expected Google user"
+                )
+            self.token = token
+            # Google auth treats expiry as advisory. The adapter calls refresh
+            # on every request, so this value is not used to extend trust.
+            self.expiry = datetime.now(timezone.utc) + timedelta(seconds=1)
+            self._verified_principal = principal
+
+        def before_request(self, request, method, url, headers):
+            self.refresh(request)
+            self.apply(headers)
+
+    return PrincipalBoundCredentials()

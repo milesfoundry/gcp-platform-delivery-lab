@@ -19,7 +19,7 @@ from run_contract import (
     ContractError,
     cleanup_plan,
 )
-from run_ledger import LedgerSnapshot, RunLedger
+from run_ledger import LedgerConflict, LedgerSnapshot, RunLedger
 
 
 FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
@@ -137,6 +137,30 @@ class RecoveryController:
         if callable(authorize_actor) and action == "delete":
             actor = authorize_actor(lease_owner, action, resource_type)
             actor_id = getattr(actor, "auditor_id", actor if isinstance(actor, str) else None)
+        if (
+            before.manifest["state"] == "project_retiring"
+            and action == "delete"
+            and resource_type in {
+                "gcp.billing.project_billing_info",
+                "gcp.resourcemanager.project",
+            }
+            and actor_id is not None
+        ):
+            prior_retirement_actors = {
+                event["actor_id"]
+                for event in before.manifest["operations"]
+                if event["kind"] == "intent"
+                and event["phase"] == "project_retiring"
+                and event["resource_type"] in {
+                    "gcp.billing.project_billing_info",
+                    "gcp.resourcemanager.project",
+                }
+                and "actor_id" in event
+            }
+            if prior_retirement_actors and prior_retirement_actors != {actor_id}:
+                raise LedgerConflict(
+                    "project retirement must use the same verified Google user"
+                )
         snapshot = self.ledger.record_operation_intent(
             run_id,
             expected_generation=before.generation,

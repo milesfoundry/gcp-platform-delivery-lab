@@ -4,8 +4,12 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import sys
+import types
 import unittest
+from unittest.mock import patch
 
+from gcp_token_identity import IdentityVerificationError
 from run_contract import ContractError, _audit_summary, operation_id
 from recovery_controller import ProviderReceipt, RecoveryController
 from run_ledger import (
@@ -20,6 +24,30 @@ from run_ledger import (
     object_name,
 )
 from test_run_contract import RUN_ID, intent
+
+
+class FakeIdentityResponse:
+    status_code = 200
+
+    def __init__(self, email):
+        self.email = email
+
+    def json(self):
+        return {
+            "sub": "12345678901234567890",
+            "email": self.email,
+            "email_verified": True,
+        }
+
+
+class FakeIdentityTransport:
+    def __init__(self, email="project-reclaimer@example.com"):
+        self.email = email
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return FakeIdentityResponse(self.email)
 
 
 def current_intent():
@@ -891,15 +919,18 @@ class RunLedgerTests(unittest.TestCase):
 
         class RetirementProvider:
             lose_project_delete_response = True
+            actor_id = "google-user-12345678901234567890"
+            submit_calls = 0
 
             def authorize_actor(self, lease_owner, action, resource_type):
                 if lease_owner != "operator:project-reclaimer":
                     raise LedgerConflict(
                         "project retirement requires the named project-reclaimer lease"
                     )
-                return "google-user-12345678901234567890"
+                return self.actor_id
 
             def submit(self, action, resource_type, resource_id, request):
+                self.submit_calls += 1
                 if (
                     resource_type == "gcp.resourcemanager.project"
                     and self.lose_project_delete_response
@@ -946,8 +977,9 @@ class RunLedgerTests(unittest.TestCase):
             owner="operator:project-reclaimer",
             now=self.now + timedelta(seconds=37),
         )
+        retirement_provider = RetirementProvider()
         controller = RecoveryController(
-            self.ledger, RetirementProvider(),
+            self.ledger, retirement_provider,
             clock=lambda: self.now + timedelta(seconds=38),
         )
         billing = controller.execute(
@@ -960,6 +992,22 @@ class RunLedgerTests(unittest.TestCase):
             request={"billing_account_name": ""},
         )
         self.assertEqual(billing.state, "succeeded")
+        retirement_provider.actor_id = "google-user-98765432109876543210"
+        calls_before_principal_change = retirement_provider.submit_calls
+        with self.assertRaisesRegex(LedgerConflict, "same verified Google user"):
+            controller.execute(
+                RUN_ID,
+                lease_owner="operator:project-reclaimer",
+                attempt=1,
+                action="delete",
+                resource_type="gcp.resourcemanager.project",
+                resource_id=f"projects/{self.intent['scope']['project_id']}",
+                request={},
+            )
+        self.assertEqual(
+            retirement_provider.submit_calls, calls_before_principal_change
+        )
+        retirement_provider.actor_id = "google-user-12345678901234567890"
         with self.assertRaisesRegex(ConnectionError, "lost response"):
             controller.execute(
                 RUN_ID,
@@ -1298,6 +1346,109 @@ class RunLedgerTests(unittest.TestCase):
         self.assertEqual(adapter.read("runs/x/manifest.json"), (b"{}", 23))
         _, download_kwargs = bucket.value.calls[-1]
         self.assertEqual(download_kwargs["if_generation_match"], 23)
+
+    def test_gcs_client_verifies_same_explicit_google_user_before_each_request(self):
+        class FakeCredentialsBase:
+            def __init__(self):
+                self.token = None
+
+            def apply(self, headers):
+                headers["Authorization"] = f"Bearer {self.token}"
+
+        class FakeTokenSource:
+            def access_token(self):
+                return "short-lived-test-token"
+
+        class FakeBucket:
+            pass
+
+        class FakeClient:
+            def __init__(self, *, credentials):
+                self.credentials = credentials
+
+            def bucket(self, bucket_name):
+                self.bucket_name = bucket_name
+                return FakeBucket()
+
+        client_holder = {}
+
+        def client_factory(*, credentials):
+            client_holder["client"] = FakeClient(credentials=credentials)
+            return client_holder["client"]
+
+        google = types.ModuleType("google")
+        google.__path__ = []
+        auth = types.ModuleType("google.auth")
+        auth.__path__ = []
+        auth_credentials = types.ModuleType("google.auth.credentials")
+        auth_credentials.Credentials = FakeCredentialsBase
+        api_core = types.ModuleType("google.api_core")
+        api_core.__path__ = []
+        exceptions = types.ModuleType("google.api_core.exceptions")
+        exceptions.NotFound = type("NotFound", (Exception,), {})
+        exceptions.PreconditionFailed = type("PreconditionFailed", (Exception,), {})
+        cloud = types.ModuleType("google.cloud")
+        cloud.__path__ = []
+        storage = types.ModuleType("google.cloud.storage")
+        storage.Client = client_factory
+        cloud.storage = storage
+        modules = {
+            "google": google,
+            "google.auth": auth,
+            "google.auth.credentials": auth_credentials,
+            "google.api_core": api_core,
+            "google.api_core.exceptions": exceptions,
+            "google.cloud": cloud,
+            "google.cloud.storage": storage,
+        }
+        identity = FakeIdentityTransport()
+        with patch.dict(sys.modules, modules):
+            adapter = GcsObjectStore(
+                "private-ledger-bucket",
+                token_source=FakeTokenSource(),
+                identity_transport=identity,
+                expected_email="project-reclaimer@example.com",
+                expected_auditor_id="google-user-12345678901234567890",
+            )
+            self.assertIsInstance(adapter._bucket, FakeBucket)
+            self.assertEqual(client_holder["client"].bucket_name, "private-ledger-bucket")
+            credentials = client_holder["client"].credentials
+            headers = {}
+            credentials.before_request(
+                None, "POST", "https://storage.googleapis.com/", headers
+            )
+            self.assertEqual(
+                headers["Authorization"], "Bearer short-lived-test-token"
+            )
+            self.assertEqual(len(identity.calls), 1)
+            self.assertEqual(
+                identity.calls[0][0],
+                "https://openidconnect.googleapis.com/v1/userinfo",
+            )
+
+            identity.email = "someone-else@example.com"
+            headers = {}
+            with self.assertRaises(IdentityVerificationError):
+                credentials.before_request(
+                    None, "POST", "https://storage.googleapis.com/", headers
+                )
+            self.assertNotIn("Authorization", headers)
+            self.assertEqual(len(identity.calls), 2)
+
+            identity.email = "project-reclaimer@example.com"
+            wrong_subject_adapter = GcsObjectStore(
+                "private-ledger-bucket",
+                token_source=FakeTokenSource(),
+                identity_transport=identity,
+                expected_email="project-reclaimer@example.com",
+                expected_auditor_id="google-user-another-subject",
+            )
+            self.assertIsInstance(wrong_subject_adapter._bucket, FakeBucket)
+            headers = {}
+            with self.assertRaisesRegex(IdentityVerificationError, "subject"):
+                client_holder["client"].credentials.before_request(
+                    None, "POST", "https://storage.googleapis.com/", headers
+                )
 
 
 if __name__ == "__main__":

@@ -13,6 +13,13 @@ import json
 import re
 from typing import Protocol
 
+from gcp_token_identity import (
+    IdentityTransport,
+    IdentityVerificationError,
+    AccessTokenSource,
+    verified_google_credentials,
+)
+
 from run_contract import (
     ContractError,
     DELETE_ORDER,
@@ -1221,18 +1228,39 @@ class GcsObjectStore:
     """Google Cloud Storage object adapter using generation-match preconditions.
 
     `google-cloud-storage` is imported lazily so local contracts and fake-store
-    tests do not need credentials or a cloud SDK installation.
+    tests do not need credentials or a cloud SDK installation. A caller must
+    supply the same short-lived token source used by its provider adapter; the
+    GCS credentials verify the configured Google user before every request.
     """
 
-    def __init__(self, bucket_name: str):
+    def __init__(
+        self,
+        bucket_name: str,
+        *,
+        token_source: AccessTokenSource,
+        identity_transport: IdentityTransport,
+        expected_email: str,
+        expected_auditor_id: str,
+    ):
         if not isinstance(bucket_name, str) or not bucket_name:
             raise ValueError("bucket_name must be non-empty")
+        if token_source is None or identity_transport is None:
+            raise ValueError("explicit token and identity transports are required")
         try:
             from google.api_core.exceptions import NotFound, PreconditionFailed
             from google.cloud import storage
         except ImportError as exc:
-            raise LedgerError("google-cloud-storage is required for GCS access") from exc
-        self._bucket = storage.Client().bucket(bucket_name)
+            raise LedgerError("google-auth and google-cloud-storage are required for GCS access") from exc
+        try:
+            credentials = verified_google_credentials(
+                token_source,
+                identity_transport,
+                expected_email=expected_email,
+                expected_auditor_id=expected_auditor_id,
+            )
+        except IdentityVerificationError as exc:
+            raise LedgerError(str(exc)) from None
+        self._bucket = storage.Client(credentials=credentials).bucket(bucket_name)
         self._not_found = NotFound
         self._precondition_failed = PreconditionFailed
 

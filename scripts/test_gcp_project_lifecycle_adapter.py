@@ -50,14 +50,15 @@ class FakeTransport:
 
 
 class FakeIdentityTransport:
-    def __init__(self, *, email=RECLAIMER_EMAIL):
+    def __init__(self, *, email=RECLAIMER_EMAIL, subject="12345678901234567890"):
         self.email = email
+        self.subject = subject
         self.calls = []
 
     def get(self, url, *, params, headers, timeout, allow_redirects):
         self.calls.append((url, params, headers, timeout, allow_redirects))
         return FakeResponse(200, {
-            "sub": "12345678901234567890",
+            "sub": self.subject,
             "email": self.email,
             "email_verified": True,
         })
@@ -404,6 +405,20 @@ class GCPProjectLifecycleAdapterTests(unittest.TestCase):
         self.assertEqual(actor.email, RECLAIMER_EMAIL)
         self.assertEqual(actor.auditor_id, "google-user-12345678901234567890")
         self.assertEqual(len(identity.calls), 1)
+
+    def test_project_reclaimer_subject_cannot_change_between_retirement_calls(self):
+        identity = FakeIdentityTransport()
+        transport = FakeTransport([])
+        provider = adapter(transport, identity_transport=identity)
+        provider.authorize_actor(
+            "operator:project-reclaimer", "delete", PROJECT_TYPE
+        )
+        identity.subject = "98765432109876543210"
+        with self.assertRaisesRegex(
+            ProjectLifecycleError, "Google subject changed during the run"
+        ):
+            provider.submit("delete", PROJECT_TYPE, f"projects/{PROJECT}", {})
+        self.assertEqual(transport.calls, [])
 
     def test_project_retirement_fails_closed_without_identity_configuration(self):
         provider = GCPProjectLifecycleAdapter(

@@ -37,8 +37,10 @@ Recovery controls can be reclaimed only after exact project absence is
 reconciled. The controller requires the named reclaimer lease, verifies the
 Google user token against a configured expected email, and records the stable
 Google subject with each retirement intent. Each retirement API request is
-verified before use. The GCS ledger writer is not yet wired to the same
-principal, so this path is fake-tested only and is not live-qualified.
+verified before use. The GCS writer requires an explicit token source, expected
+email and stable subject, and verifies them before each storage request. A
+trusted runtime must still provide the same token source and principal to both
+adapters; this path is fake-tested only and is not live-qualified.
 `gcp_cleanup_adapter.py` now implements a deletion-only adapter for exact
 Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GCS objects,
 GKE node-pool/cluster, and GKE Fleet membership/feature resources. It requires an
@@ -54,17 +56,20 @@ by the mutation adapter. The cleanup adapter has not been wired to the ledger
 controller or deployed identities. Its cluster review callback is an external
 gate, not proof of Terraform state or a GKE API deletion-protection setting.
 The source now registers supported run-owned discoveries under a separate
-auditor lease before cleanup; API-to-ledger principal binding, IAM isolation and
-live provider behavior remain unqualified. GCS deletion verifies
+auditor lease before cleanup. The GCS writer verifies an explicit token source
+against the configured Google email and stable subject before each request;
+trusted runtime wiring, IAM isolation and live provider behavior remain
+unqualified. GCS deletion verifies
 the project number, bucket ownership and London bucket location; it requires an
 explicit zero-duration soft-delete policy and rejects buckets with active soft
 delete retention. `gcp_project_lifecycle_adapter.py` now provides source-level
-exact-run project creation, reviewed billing association/removal, and API
-enablement for the manifest's sorted allowlist. It uses an explicit short-lived
-token source and HTTPS transport, with fake tests for exact IDs, parent, run
-labels, billing account and operation scope. It does not delete projects and is
-not wired to a deployed launcher or live GCP identity. Its presence does not
-authorize cloud activation; no cloud API call is made by CI or this runbook.
+exact-run project creation, reviewed billing association/removal, API enablement
+for the manifest's sorted allowlist, and post-audit project deletion. It uses an
+explicit short-lived token source and HTTPS transport, with fake tests for exact
+IDs, parent, run labels, billing account and operation scope. Retirement
+requires a verified human principal. It is not wired to a deployed launcher or
+live GCP identity. Its presence does not authorize cloud activation; no cloud
+API call is made by CI or this runbook.
 Fake controller tests cover a create committed before a lost response,
 cross-run project-ID rejection before provider access, and repeated cleanup
 after a confirmed delete without a second delete call. These verify the local
@@ -95,8 +100,9 @@ receipt matches the current provider-operation count. A failed or ambiguous
 provider operation requires a fresh inventory before resuming cleanup. This
 handoff is implemented and fake-tested in source, but the collector, ledger and
 mutation adapter are not wired together in a deployed identity or live GCP
-environment. API-to-ledger principal binding, control reclamation and live
-provider qualification remain open.
+environment. The GCS writer verifies an explicit token source against the
+configured Google email and stable subject before each request; trusted runtime
+wiring, control reclamation and live provider qualification remain open.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources
