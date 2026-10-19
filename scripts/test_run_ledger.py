@@ -351,6 +351,18 @@ class RunLedgerTests(unittest.TestCase):
                 request_sha256="d" * 64,
                 now=self.now + timedelta(seconds=9),
             )
+        with self.assertRaises(ContractError):
+            self.ledger.record_operation_intent(
+                RUN_ID,
+                expected_generation=recorded.generation,
+                lease_owner="launcher",
+                attempt=2,
+                action="create",
+                resource_type="gcp.compute.network",
+                resource_id=resource_id,
+                request_sha256=request_sha,
+                now=self.now + timedelta(seconds=9),
+            )
 
     def test_pending_create_can_reconcile_after_deadline_but_new_attempt_cannot(self):
         self.intent["deadline_at"] = (
@@ -406,19 +418,6 @@ class RunLedgerTests(unittest.TestCase):
                 request_sha256=request_sha,
                 now=self.now + timedelta(seconds=13),
             )
-        with self.assertRaises(ContractError):
-            self.ledger.record_operation_intent(
-                RUN_ID,
-                expected_generation=recorded.generation,
-                lease_owner="launcher",
-                attempt=2,
-                action="create",
-                resource_type="gcp.compute.network",
-                resource_id=resource_id,
-                request_sha256=request_sha,
-                now=self.now + timedelta(seconds=9),
-            )
-
     def test_long_running_operation_receipt_is_append_only_and_idempotent(self):
         leased = self.lease_in_provisioning()
         resource_id = f"projects/{self.intent['scope']['project_id']}/global/networks/{RUN_ID}-network"
