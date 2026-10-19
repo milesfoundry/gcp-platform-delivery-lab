@@ -54,7 +54,11 @@ service account with only `roles/container.defaultNodeServiceAccount`, the
 project-scoped `configmanagement` Feature, network, cluster, node pool and Fleet
 membership resources. These API services stay enabled until separate project
 reclamation. The reaper cannot change project IAM or delete the project-owned
-node identity; an authorized project owner reclaims them after audit.
+node identity; a separate project-reclaimer unlinks billing and deletes the exact
+project after the passed workload audit. Its ledger gate waits for the project
+GET to return 404 before recovery controls can be reclaimed. This is
+mock-tested source only: the operator lease is not bound to a verified cloud
+principal and no live project-deletion path is qualified.
 
 Both roots use local state paths under `.terraform/`. This is not runner-loss
 recovery. The candidate remote state bucket, separate private backup, durable

@@ -30,6 +30,12 @@ provider operation name for accepted asynchronous requests without marking them
 complete; only a terminal result resolves an intent. The credential-free
 `recovery_controller.py` submits once or resumes by polling/inspecting through
 an injected provider adapter, and can run ordered cleanup against that adapter.
+The project lifecycle adapter also supports the separate post-audit project
+reclaimer: billing must be unlinked first, project deletion is journaled, and the
+operation remains unresolved while Resource Manager reports `DELETE_REQUESTED`.
+Recovery controls can be reclaimed only after exact project absence is
+reconciled. Its named operator lease is not yet bound to a verified cloud
+principal; this path is fake-tested only and is not live-qualified.
 `gcp_cleanup_adapter.py` now implements a deletion-only adapter for exact
 Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GCS objects,
 GKE node-pool/cluster, and GKE Fleet membership/feature resources. It requires an

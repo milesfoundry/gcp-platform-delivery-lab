@@ -268,13 +268,19 @@ existing Terraform supports disposable projects.
 
 Project lifecycle is a separate authority boundary: project creation requires
 `resourcemanager.projects.create` on the parent, and the Resource Manager create
-method does not attach a billing account. Billing association needs its own
-permission and verification step. Project deletion requires
-`resourcemanager.projects.delete` on the parent, so automatic project deletion
-is not part of the reaper candidate; define and qualify a separate post-audit
-reclamation path or document the retained empty project and its quota/lifecycle
-policy. For cost monitoring, the Budget API can scope an alerts-only budget to
-one project under the billing account, while Google recommends keeping
+method does not attach a billing account. Billing association has its own
+permission and verification step. The project-reclaimer path now journals a
+billing unlink, then permits exact-project deletion only after a passed
+independent workload audit and all workload resources are marked deleted. Its
+poller keeps the operation unresolved while Resource Manager reports
+`DELETE_REQUESTED`; it resolves only after exact project lookup returns 404.
+Recovery-control reclamation is gated on that reconciled absence, and final
+closure still requires a separate complete project/billing/budget/control audit.
+The ledger additionally requires the named `operator:project-reclaimer` lease.
+That lease label is not yet bound to a verified cloud principal, so this path
+is source-level and fake-transport tested, not authorized or qualified for live
+use. For cost monitoring, the Budget API can scope an alerts-only budget to one
+project under the billing account, while Google recommends keeping
 programmatic budget-notification topics in a FinOps administration project.
 These are design capabilities, not proof that the current account has the
 required parent or billing permissions.
@@ -494,7 +500,8 @@ Required manifest fields:
   sequence. Schema v2 starts at `control_bootstrapping`, then records `prepared`,
   `project_create_requested`, `project_created`, `billing_link_requested`,
   `project_linked`, `api_enablement`, `provisioning`, `ready`,
-  `teardown_requested`, `cleaning`, `auditing`, `controls_reclaiming`, `closed`
+  `teardown_requested`, `cleaning`, `auditing`, `project_retiring`,
+  `controls_reclaiming`, `closed`
   or `incomplete`. Create/link requests are persisted before calling GCP so lost
   responses can be reconciled by exact ID. The reaper never guesses whether a
   project was created or billed; ambiguity becomes `incomplete` and invokes the
@@ -567,25 +574,31 @@ Required manifest fields:
   connected in a deployed runtime. See Google's
   [OpenID Connect UserInfo endpoint](https://developers.google.com/identity/openid-connect/reference#userinfo)
   and [token types](https://docs.cloud.google.com/docs/authentication/token-types).
-  `scripts/gcp_project_lifecycle_adapter.py` now supports the first provider
-  lifecycle mutations: exact-ID project creation under one configured folder
-  or organization, billing link/unlink for one configured billing account, and
-  API enablement from the manifest allowlist. It returns scoped long-running
-  operation names for Resource Manager and Service Usage and reconciles exact
-  project parent/run labels, billing state and enabled service state. Fake
-  transport tests cover target/parent/account/API rejection and async polling.
+  `scripts/gcp_project_lifecycle_adapter.py` supports exact-ID project creation
+  under one configured folder or organization, billing link/unlink for one
+  configured billing account, API enablement from the manifest allowlist, and
+  project deletion. Teardown enters `project_retiring` only after the passed
+  workload audit and empty workload inventory. The ledger requires a successful
+  billing unlink before it accepts a project-delete intent; only the named
+  project-reclaimer lease can record those operations. Project deletion stays
+  `running` while the exact project is `DELETE_REQUESTED` and resolves only on
+  exact 404. The transition to `controls_reclaiming` requires resolved billing
+  unlink and project deletion; `closed` still requires the independent full
+  closure receipt. Fake transport tests cover target/parent/account/API
+  rejection, deletion polling and the requested-versus-absent distinction.
   The v3 Project schema uses `displayName` and `state`; the Billing API request
   sends only writable `billingAccountName`, omitting output-only fields.
-  The adapter has no project-delete path, is not deployed or wired to a trusted
-  launcher, and does not solve creator Owner grants, billing-budget preflight,
-  or independent principal-to-ledger binding. It remains unqualified for live
-  use. Google documents project creation as a separate asynchronous operation
+  The adapter is not deployed or wired to a trusted launcher, and does not solve
+  creator Owner grants, billing-budget preflight, or independent
+  principal-to-ledger binding. It remains unqualified for live use. Google
+  documents project creation as a separate asynchronous operation
   from billing association; billing association can enable charges. See the
   [projects.create API](https://docs.cloud.google.com/resource-manager/reference/rest/v3/projects/create),
   [v3 Project schema](https://docs.cloud.google.com/resource-manager/reference/rest/v3/projects),
   [billing association API](https://docs.cloud.google.com/billing/docs/reference/rest/v1/projects/updateBillingInfo),
   [ProjectBillingInfo schema](https://docs.cloud.google.com/billing/docs/reference/rest/v1/ProjectBillingInfo),
-  and [Service Usage enable API](https://docs.cloud.google.com/service-usage/docs/reference/rest/v1/services/enable).
+  [Service Usage enable API](https://docs.cloud.google.com/service-usage/docs/reference/rest/v1/services/enable),
+  and [project deletion API](https://docs.cloud.google.com/resource-manager/reference/rest/v3/projects/delete).
   `scripts/closure_auditor.py` now defines a separate credential-free closure
   report bound to the exact manifest. It requires complete pre-deletion
   Service Usage enabled-API and run-project service-account inventories, then

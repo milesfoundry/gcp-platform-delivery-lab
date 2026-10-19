@@ -1,9 +1,9 @@
-"""Exact-project GCP create, bill, and API-enable adapter.
+"""Exact-project GCP create, retire, bill, and API-enable adapter.
 
 This adapter is deliberately separate from workload cleanup. It accepts only
 the run project declared at construction, one reviewed parent, one billing
-account, and the exact API allowlist. It does not discover credentials or
-delete projects. Live use is not qualified.
+account, and the exact API allowlist. Project retirement is a separately gated
+teardown operation. Live use is not qualified.
 """
 
 from __future__ import annotations
@@ -106,8 +106,12 @@ class GCPProjectLifecycleAdapter:
         if resource_type == PROJECT_TYPE:
             if resource_id != self.project_resource_id:
                 raise ProjectLifecycleError("project operation target does not match this run")
+            if action == "delete":
+                if request != {}:
+                    raise ProjectLifecycleError("project delete request body must be empty")
+                return self._delete_project()
             if action != "create":
-                raise ProjectLifecycleError("project deletion requires a separate reviewed adapter")
+                raise ProjectLifecycleError("project action must create or delete")
             expected = {
                 "project_id": self._project_id,
                 "display_name": self._run_id,
@@ -163,8 +167,17 @@ class GCPProjectLifecycleAdapter:
                 and isinstance(labels, dict)
                 and labels.get("lab_run_id") == self._run_id
             )
-            state = "present" if owned and payload.get("state") == "ACTIVE" else "unknown"
-            return ProviderReceipt(state, _digest(payload))
+            state = (
+                "present" if owned and payload.get("state") == "ACTIVE"
+                else "retiring" if owned and payload.get("state") == "DELETE_REQUESTED"
+                else "unknown"
+            )
+            operation_name = None
+            if state == "retiring":
+                operation_name = (
+                    f"resourcemanager-delete/projects/{self._project_id}/operations/accepted"
+                )
+            return ProviderReceipt(state, _digest(payload), operation_name)
         if resource_type == BILLING_TYPE:
             if resource_id != self.project_resource_id:
                 raise ProjectLifecycleError("billing inspection target does not match this run")
@@ -209,6 +222,29 @@ class GCPProjectLifecycleAdapter:
     def poll_operation(self, operation_name: str) -> ProviderReceipt:
         if not isinstance(operation_name, str) or not OPERATION_NAME.fullmatch(operation_name):
             raise ProjectLifecycleError("provider operation name is malformed")
+        delete_prefix = f"resourcemanager-delete/projects/{self._project_id}/operations/"
+        if operation_name.startswith(delete_prefix):
+            provider_name = operation_name[len(delete_prefix):]
+            if provider_name == "accepted":
+                return self._inspect_project_deletion(operation_name)
+            if re.fullmatch(r"[A-Za-z0-9._~-]{1,180}", provider_name) is None:
+                raise ProjectLifecycleError("provider operation name is malformed")
+            status, payload = self._send(
+                "GET", RESOURCE_MANAGER,
+                f"/v3/operations/{quote(provider_name, safe='._~-')}",
+            )
+            if status == 404:
+                raise ProjectLifecycleError("provider operation is no longer observable")
+            if status != 200 or not isinstance(payload, dict):
+                raise ProjectLifecycleError(f"provider operation poll returned HTTP {status}")
+            if payload.get("name") != f"operations/{provider_name}":
+                raise ProjectLifecycleError("provider returned a different operation identity")
+            receipt = self._operation_receipt(
+                payload, operation_name, RESOURCE_MANAGER, operation_kind="delete"
+            )
+            if receipt.state != "succeeded":
+                return receipt
+            return self._inspect_project_deletion(operation_name)
         if operation_name.startswith(f"resourcemanager/projects/{self._project_id}/operations/"):
             provider_name = operation_name.split("/operations/", 1)[1]
             if re.fullmatch(r"[A-Za-z0-9._~-]{1,180}", provider_name) is None:
@@ -248,6 +284,57 @@ class GCPProjectLifecycleAdapter:
             raise ProjectLifecycleError(f"project creation returned HTTP {status}")
         return self._start_operation(payload, RESOURCE_MANAGER, "resourcemanager")
 
+    def _delete_project(self) -> ProviderReceipt:
+        status, project = self._send(
+            "GET", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}"
+        )
+        if status == 404:
+            return ProviderReceipt("absent", _digest({"status": 404}))
+        if status != 200 or not isinstance(project, dict):
+            raise ProjectLifecycleError(
+                f"project pre-delete inspection returned HTTP {status}"
+            )
+        labels = project.get("labels")
+        owned = (
+            project.get("projectId") == self._project_id
+            and project.get("displayName") == self._run_id
+            and project.get("parent") == self._parent
+            and isinstance(labels, dict)
+            and labels.get("lab_run_id") == self._run_id
+        )
+        if not owned:
+            raise ProjectLifecycleError("project pre-delete identity does not match this run")
+        if project.get("state") == "DELETE_REQUESTED":
+            accepted_name = (
+                f"resourcemanager-delete/projects/{self._project_id}/operations/accepted"
+            )
+            return ProviderReceipt("running", _digest(project), accepted_name)
+        if project.get("state") != "ACTIVE":
+            raise ProjectLifecycleError("project is not active for exact project deletion")
+
+        billing_status, billing = self._send(
+            "GET", CLOUD_BILLING,
+            f"/v1/{self.project_resource_id}/billingInfo",
+        )
+        if (
+            billing_status != 200 or not isinstance(billing, dict)
+            or billing.get("projectId") != self._project_id
+            or billing.get("billingEnabled") is not False
+            or billing.get("billingAccountName", "") != ""
+        ):
+            raise ProjectLifecycleError(
+                "project deletion requires verified detached billing"
+            )
+
+        status, payload = self._send(
+            "DELETE", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}"
+        )
+        if status not in {200, 202} or not isinstance(payload, dict):
+            raise ProjectLifecycleError(f"project deletion returned HTTP {status}")
+        return self._start_operation(
+            payload, RESOURCE_MANAGER, "resourcemanager-delete", operation_kind="delete"
+        )
+
     def _set_billing(self, billing_account_name: str) -> ProviderReceipt:
         status, payload = self._send(
             "PUT", CLOUD_BILLING,
@@ -274,14 +361,20 @@ class GCPProjectLifecycleAdapter:
         return self._start_operation(payload, SERVICE_USAGE, "serviceusage", service=service)
 
     def _start_operation(
-        self, payload, host: str, prefix: str, *, service: str | None = None
+        self, payload, host: str, prefix: str, *, service: str | None = None,
+        operation_kind: str = "create",
     ) -> ProviderReceipt:
         if payload.get("error"):
             return ProviderReceipt("failed", _digest(payload))
         name = payload.get("name")
         if payload.get("done") is True:
-            if host == RESOURCE_MANAGER:
+            if host == RESOURCE_MANAGER and operation_kind == "create":
                 self._validate_created_project(payload.get("response"))
+            if operation_kind == "delete":
+                accepted_name = (
+                    f"resourcemanager-delete/projects/{self._project_id}/operations/accepted"
+                )
+                return self._inspect_project_deletion(accepted_name)
             return ProviderReceipt("succeeded", _digest(payload))
         if payload.get("done") is not False or not isinstance(name, str):
             raise ProjectLifecycleError("provider returned malformed long-running operation")
@@ -290,7 +383,12 @@ class GCPProjectLifecycleAdapter:
         operation_id = name[len("operations/"):]
         if not re.fullmatch(r"[A-Za-z0-9._~-]{1,180}", operation_id):
             raise ProjectLifecycleError("provider operation name is malformed")
-        if host == SERVICE_USAGE:
+        if prefix == "resourcemanager-delete":
+            scoped_name = (
+                f"resourcemanager-delete/projects/{self._project_id}/operations/"
+                f"{operation_id}"
+            )
+        elif host == SERVICE_USAGE:
             scoped_name = (
                 f"{prefix}/projects/{self._project_id}/services/{service}/"
                 f"operations/{operation_id}"
@@ -301,16 +399,42 @@ class GCPProjectLifecycleAdapter:
             raise ProjectLifecycleError("scoped provider operation name exceeds the ledger bound")
         return ProviderReceipt("running", _digest(payload), scoped_name)
 
-    def _operation_receipt(self, payload, operation_name: str, host: str) -> ProviderReceipt:
+    def _operation_receipt(
+        self, payload, operation_name: str, host: str, *, operation_kind: str = "create"
+    ) -> ProviderReceipt:
         if payload.get("error"):
             return ProviderReceipt("failed", _digest(payload), operation_name)
         if payload.get("done") is False:
             return ProviderReceipt("running", _digest(payload), operation_name)
         if payload.get("done") is not True:
             raise ProjectLifecycleError("provider operation has no terminal state")
-        if host == RESOURCE_MANAGER:
+        if host == RESOURCE_MANAGER and operation_kind == "create":
             self._validate_created_project(payload.get("response"))
         return ProviderReceipt("succeeded", _digest(payload), operation_name)
+
+    def _inspect_project_deletion(self, operation_name: str) -> ProviderReceipt:
+        status, payload = self._send(
+            "GET", RESOURCE_MANAGER, f"/v3/{self.project_resource_id}"
+        )
+        if status == 404:
+            return ProviderReceipt("succeeded", _digest({"status": 404}), operation_name)
+        if status != 200 or not isinstance(payload, dict):
+            raise ProjectLifecycleError(
+                f"project deletion reconciliation returned HTTP {status}"
+            )
+        labels = payload.get("labels")
+        owned = (
+            payload.get("projectId") == self._project_id
+            and payload.get("displayName") == self._run_id
+            and payload.get("parent") == self._parent
+            and isinstance(labels, dict)
+            and labels.get("lab_run_id") == self._run_id
+        )
+        if not owned:
+            return ProviderReceipt("unknown", _digest(payload), operation_name)
+        if payload.get("state") == "DELETE_REQUESTED":
+            return ProviderReceipt("running", _digest(payload), operation_name)
+        return ProviderReceipt("unknown", _digest(payload), operation_name)
 
     def _validate_created_project(self, project: object) -> None:
         if not isinstance(project, dict):

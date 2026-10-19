@@ -639,6 +639,18 @@ class RunLedger:
         at = now or self._clock()
         current = self.read(run_id)
         self._require_active_lease(current, lease_owner, at)
+        if (
+            current.manifest["state"] == "project_retiring"
+            and action == "delete"
+            and resource_type in {
+                "gcp.billing.project_billing_info",
+                "gcp.resourcemanager.project",
+            }
+            and lease_owner != "operator:project-reclaimer"
+        ):
+            raise LedgerConflict(
+                "project retirement requires the named project-reclaimer lease"
+            )
         prior_attempts = [
             event
             for event in current.manifest["operations"]

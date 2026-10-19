@@ -7,6 +7,7 @@ import json
 import unittest
 
 from run_contract import ContractError, _audit_summary, operation_id
+from recovery_controller import ProviderReceipt, RecoveryController
 from run_ledger import (
     GenerationConflict,
     GcsObjectStore,
@@ -879,9 +880,7 @@ class RunLedgerTests(unittest.TestCase):
             now=self.now + timedelta(seconds=34),
         )
         candidate = deepcopy(operator.manifest)
-        candidate["state"] = "controls_reclaiming"
-        for control in candidate["controls"]:
-            control["status"] = "deleted"
+        candidate["state"] = "project_retiring"
         operator = self.ledger.replace(
             RUN_ID,
             expected_generation=operator.generation,
@@ -889,17 +888,124 @@ class RunLedgerTests(unittest.TestCase):
             manifest=candidate,
             now=self.now + timedelta(seconds=35),
         )
+
+        class RetirementProvider:
+            lose_project_delete_response = True
+
+            def submit(self, action, resource_type, resource_id, request):
+                if (
+                    resource_type == "gcp.resourcemanager.project"
+                    and self.lose_project_delete_response
+                ):
+                    self.lose_project_delete_response = False
+                    raise ConnectionError("simulated accepted project delete with lost response")
+                return ProviderReceipt("succeeded", "e" * 64)
+
+            def inspect_resource(self, resource_type, resource_id):
+                if resource_type == "gcp.resourcemanager.project":
+                    return ProviderReceipt(
+                        "retiring", "f" * 64,
+                        "resourcemanager-delete/projects/sample-lab-123/operations/accepted",
+                    )
+                return ProviderReceipt("absent", "e" * 64)
+
+            def poll_operation(self, operation_name):
+                return ProviderReceipt("succeeded", "e" * 64, operation_name)
+
+        retirement_provider = RetirementProvider()
+        controller = RecoveryController(
+            self.ledger, retirement_provider,
+            clock=lambda: self.now + timedelta(seconds=36),
+        )
+        with self.assertRaisesRegex(LedgerConflict, "named project-reclaimer"):
+            controller.execute(
+                RUN_ID,
+                lease_owner="operator:reclaimer",
+                attempt=1,
+                action="delete",
+                resource_type="gcp.billing.project_billing_info",
+                resource_id=f"projects/{self.intent['scope']['project_id']}",
+                request={"billing_account_name": ""},
+            )
         operator = self.ledger.release_lease(
             RUN_ID,
             expected_generation=operator.generation,
             owner="operator:reclaimer",
             now=self.now + timedelta(seconds=36),
         )
+        operator = self.ledger.acquire_lease(
+            RUN_ID,
+            expected_generation=operator.generation,
+            owner="operator:project-reclaimer",
+            now=self.now + timedelta(seconds=37),
+        )
+        controller = RecoveryController(
+            self.ledger, RetirementProvider(),
+            clock=lambda: self.now + timedelta(seconds=38),
+        )
+        billing = controller.execute(
+            RUN_ID,
+            lease_owner="operator:project-reclaimer",
+            attempt=1,
+            action="delete",
+            resource_type="gcp.billing.project_billing_info",
+            resource_id=f"projects/{self.intent['scope']['project_id']}",
+            request={"billing_account_name": ""},
+        )
+        self.assertEqual(billing.state, "succeeded")
+        with self.assertRaisesRegex(ConnectionError, "lost response"):
+            controller.execute(
+                RUN_ID,
+                lease_owner="operator:project-reclaimer",
+                attempt=1,
+                action="delete",
+                resource_type="gcp.resourcemanager.project",
+                resource_id=f"projects/{self.intent['scope']['project_id']}",
+                request={},
+            )
+        pending = controller.execute(
+            RUN_ID,
+            lease_owner="operator:project-reclaimer",
+            attempt=1,
+            action="delete",
+            resource_type="gcp.resourcemanager.project",
+            resource_id=f"projects/{self.intent['scope']['project_id']}",
+            request={},
+        )
+        self.assertEqual(pending.state, "running")
+        project = controller.execute(
+            RUN_ID,
+            lease_owner="operator:project-reclaimer",
+            attempt=1,
+            action="delete",
+            resource_type="gcp.resourcemanager.project",
+            resource_id=f"projects/{self.intent['scope']['project_id']}",
+            request={},
+        )
+        self.assertEqual(project.state, "succeeded")
+        operator = self.ledger.read(RUN_ID)
+        candidate = deepcopy(operator.manifest)
+        candidate["state"] = "controls_reclaiming"
+        for control in candidate["controls"]:
+            control["status"] = "deleted"
+        operator = self.ledger.replace(
+            RUN_ID,
+            expected_generation=operator.generation,
+            lease_owner="operator:project-reclaimer",
+            manifest=candidate,
+            now=self.now + timedelta(seconds=39),
+        )
+        operator = self.ledger.release_lease(
+            RUN_ID,
+            expected_generation=operator.generation,
+            owner="operator:project-reclaimer",
+            now=self.now + timedelta(seconds=40),
+        )
         auditor = self.ledger.acquire_lease(
             RUN_ID,
             expected_generation=operator.generation,
             owner="auditor:google-user-12345678901234567890",
-            now=self.now + timedelta(seconds=37),
+            now=self.now + timedelta(seconds=41),
         )
         closure = self.ledger.record_independent_audit(
             RUN_ID,
@@ -920,7 +1026,7 @@ class RunLedgerTests(unittest.TestCase):
                 "budget_reconciled": True,
                 "recovery_controls_absent": True,
             },
-            now=self.now + timedelta(seconds=38),
+            now=self.now + timedelta(seconds=42),
         )
         candidate = deepcopy(closure.manifest)
         candidate["state"] = "closed"
@@ -929,7 +1035,7 @@ class RunLedgerTests(unittest.TestCase):
             expected_generation=closure.generation,
             lease_owner="auditor:google-user-12345678901234567890",
             manifest=candidate,
-            now=self.now + timedelta(seconds=39),
+            now=self.now + timedelta(seconds=43),
         )
         self.assertEqual(closed.manifest["state"], "closed")
         self.assertEqual(
@@ -944,7 +1050,7 @@ class RunLedgerTests(unittest.TestCase):
                 expected_generation=closed.generation,
                 lease_owner="auditor:google-user-12345678901234567890",
                 manifest=changed,
-                now=self.now + timedelta(seconds=40),
+                now=self.now + timedelta(seconds=44),
             )
 
     def test_corrupt_and_duplicate_key_objects_fail_closed(self):

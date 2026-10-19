@@ -51,6 +51,7 @@ STATES = frozenset(
         "teardown_requested",
         "cleaning",
         "auditing",
+        "project_retiring",
         "controls_reclaiming",
         "closed",
         "incomplete",
@@ -69,11 +70,13 @@ TRANSITIONS = {
     "ready": {"teardown_requested", "incomplete"},
     "teardown_requested": {"cleaning", "incomplete"},
     "cleaning": {"auditing", "incomplete"},
-    "auditing": {"cleaning", "controls_reclaiming", "incomplete"},
+    "auditing": {"cleaning", "project_retiring", "incomplete"},
+    "project_retiring": {"controls_reclaiming", "incomplete"},
     "controls_reclaiming": {"closed", "incomplete"},
     "incomplete": {
         "project_created", "project_linked", "api_enablement", "provisioning",
-        "teardown_requested", "cleaning", "auditing", "controls_reclaiming",
+        "teardown_requested", "cleaning", "auditing", "project_retiring",
+        "controls_reclaiming",
     },
     "closed": set(),
 }
@@ -535,11 +538,15 @@ def _validate_operation_target(
         raise ContractError("provider operation action must be create or delete")
 
     if resource_type == "gcp.resourcemanager.project":
-        expected_phase = "project_create_requested" if action == "create" else "controls_reclaiming"
+        expected_phase = (
+            "project_create_requested" if action == "create" else "project_retiring"
+        )
         if phase != expected_phase:
             raise ContractError("run project operation is invalid for this lifecycle phase")
     elif resource_type == "gcp.billing.project_billing_info":
-        expected_phase = "billing_link_requested" if action == "create" else "controls_reclaiming"
+        expected_phase = (
+            "billing_link_requested" if action == "create" else "project_retiring"
+        )
         if phase != expected_phase:
             raise ContractError("billing operation is invalid for this lifecycle phase")
     elif resource_type == "gcp.serviceusage.service":
@@ -1030,7 +1037,10 @@ def validate_manifest(manifest: object) -> dict:
         )
         if hashlib.sha256(receipt_canonical.encode("utf-8")).hexdigest() != receipt["receipt_id"]:
             raise ContractError("discovery receipt id does not match its contents")
-        if data["state"] not in {"cleaning", "auditing", "incomplete", "controls_reclaiming", "closed"}:
+        if data["state"] not in {
+            "cleaning", "auditing", "incomplete", "project_retiring",
+            "controls_reclaiming", "closed",
+        }:
             raise ContractError("discovery receipts require a teardown lifecycle state")
 
     receipts = data.get("audit_receipts", [])
@@ -1114,7 +1124,8 @@ def validate_manifest(manifest: object) -> dict:
         if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
             raise ContractError("audit receipt manifest_generation must be positive")
         if phase == "workload" and data["state"] not in {
-            "auditing", "cleaning", "incomplete", "controls_reclaiming", "closed"
+            "auditing", "cleaning", "incomplete", "project_retiring",
+            "controls_reclaiming", "closed",
         }:
             raise ContractError("workload audit receipts require an audited lifecycle state")
         if phase == "closure" and data["state"] not in {"controls_reclaiming", "closed"}:
@@ -1135,6 +1146,81 @@ def validate_manifest(manifest: object) -> dict:
             raise ContractError("independent_audit must match the latest append-only receipt")
     elif audit is not None:
         raise ContractError("independent_audit requires an append-only audit receipt")
+
+    passed_workload_audit = any(
+        receipt["phase"] == "workload"
+        and receipt["result"] == "passed"
+        and receipt["complete"] is True
+        and receipt["checks"].get("resources_absent") is True
+        for receipt in receipts
+    )
+    if data["state"] in {"project_retiring", "controls_reclaiming", "closed"}:
+        if not passed_workload_audit:
+            raise ContractError(
+                "project retirement requires a passed independent workload audit"
+            )
+        if any(resource["status"] != "deleted" for resource in resources):
+            raise ContractError("project retirement requires every workload resource deleted")
+
+    terminal_operations = {
+        event["operation_id"]: event
+        for event in data["operations"] if event["kind"] == "result"
+    }
+    successful_results = {"succeeded", "reconciled_absent"}
+    successful_unlink = any(
+        intent["kind"] == "intent"
+        and intent["action"] == "delete"
+        and intent["resource_type"] == "gcp.billing.project_billing_info"
+        and intent["resource_id"] == f"projects/{project_id}"
+        and intent["phase"] == "project_retiring"
+        and terminal_operations.get(intent["operation_id"], {}).get("outcome")
+        in successful_results
+        for intent in data["operations"]
+    )
+    successful_project_delete = any(
+        intent["kind"] == "intent"
+        and intent["action"] == "delete"
+        and intent["resource_type"] == "gcp.resourcemanager.project"
+        and intent["resource_id"] == f"projects/{project_id}"
+        and intent["phase"] == "project_retiring"
+        and terminal_operations.get(intent["operation_id"], {}).get("outcome")
+        in successful_results
+        for intent in data["operations"]
+    )
+    unlink_result_sequence = {
+        event["operation_id"]: event["sequence"]
+        for event in data["operations"]
+        if event["kind"] == "result"
+        and event["outcome"] in successful_results
+    }
+    if any(
+        intent["kind"] == "intent"
+        and intent["action"] == "delete"
+        and intent["resource_type"] == "gcp.resourcemanager.project"
+        and intent["resource_id"] == f"projects/{project_id}"
+        and (
+            not successful_unlink
+            or not any(
+                unlink_intent["kind"] == "intent"
+                and unlink_intent["action"] == "delete"
+                and unlink_intent["resource_type"] == "gcp.billing.project_billing_info"
+                and unlink_intent["resource_id"] == f"projects/{project_id}"
+                and unlink_intent["phase"] == "project_retiring"
+                and terminal_operations.get(unlink_intent["operation_id"], {}).get(
+                    "outcome"
+                ) in successful_results
+                and unlink_result_sequence.get(unlink_intent["operation_id"], 0)
+                < intent["sequence"]
+                for unlink_intent in data["operations"]
+            )
+        )
+        for intent in data["operations"]
+    ):
+        raise ContractError("project deletion requires a prior successful billing unlink")
+    if data["state"] == "controls_reclaiming" and not successful_unlink:
+        raise ContractError("recovery controls require a completed project billing unlink")
+    if data["state"] in {"controls_reclaiming", "closed"} and not successful_project_delete:
+        raise ContractError("recovery controls require independently reconciled project deletion")
 
     if data["state"] == "closed":
         if any(resource["status"] != "deleted" for resource in resources):

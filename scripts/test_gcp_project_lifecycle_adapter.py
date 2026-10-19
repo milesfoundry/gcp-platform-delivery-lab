@@ -250,13 +250,116 @@ class GCPProjectLifecycleAdapterTests(unittest.TestCase):
             )
         self.assertEqual(denied.calls, [])
 
-    def test_project_deletion_remains_outside_adapter_authority(self):
-        transport = FakeTransport([])
-        with self.assertRaisesRegex(ProjectLifecycleError, "separate reviewed adapter"):
-            adapter(transport).submit(
+    def test_project_delete_waits_for_delete_requested_project_to_be_absent(self):
+        transport = FakeTransport([
+            FakeResponse(200, {
+                "projectId": PROJECT,
+                "displayName": RUN,
+                "parent": PARENT,
+                "state": "ACTIVE",
+                "labels": {"lab_run_id": RUN},
+            }),
+            FakeResponse(200, {
+                "projectId": PROJECT,
+                "billingEnabled": False,
+                "billingAccountName": "",
+            }),
+            FakeResponse(200, {"name": "operations/delete.456", "done": False}),
+            FakeResponse(200, {"name": "operations/delete.456", "done": False}),
+            FakeResponse(200, {"name": "operations/delete.456", "done": True}),
+            FakeResponse(404),
+        ])
+        provider = adapter(transport)
+        target = f"projects/{PROJECT}"
+        started = provider.submit("delete", PROJECT_TYPE, target, {})
+        self.assertEqual(started.state, "running")
+        self.assertEqual(
+            started.operation_name,
+            f"resourcemanager-delete/projects/{PROJECT}/operations/delete.456",
+        )
+        self.assertEqual([call[0] for call in transport.calls[:3]], ["GET", "GET", "DELETE"])
+        self.assertEqual(
+            transport.calls[2][1],
+            f"https://cloudresourcemanager.googleapis.com/v3/{target}",
+        )
+        self.assertIsNone(transport.calls[2][3])
+
+        still_deleting = provider.poll_operation(started.operation_name)
+        self.assertEqual(still_deleting.state, "running")
+        absent = provider.poll_operation(started.operation_name)
+        self.assertEqual(absent.state, "succeeded")
+        self.assertEqual(transport.calls[-1][0], "GET")
+        self.assertEqual(transport.calls[-1][1],
+                         f"https://cloudresourcemanager.googleapis.com/v3/{target}")
+
+    def test_delete_requested_state_is_not_reported_as_project_absent(self):
+        transport = FakeTransport([
+            FakeResponse(200, {
+                "projectId": PROJECT,
+                "displayName": RUN,
+                "parent": PARENT,
+                "state": "DELETE_REQUESTED",
+                "labels": {"lab_run_id": RUN},
+            }),
+        ])
+        result = adapter(transport).inspect_resource(PROJECT_TYPE, f"projects/{PROJECT}")
+        self.assertEqual(result.state, "retiring")
+
+    def test_reconciles_existing_delete_request_without_submitting_another_delete(self):
+        transport = FakeTransport([
+            FakeResponse(200, {
+                "projectId": PROJECT,
+                "displayName": RUN,
+                "parent": PARENT,
+                "state": "DELETE_REQUESTED",
+                "labels": {"lab_run_id": RUN},
+            }),
+            FakeResponse(404),
+        ])
+        provider = adapter(transport)
+        started = provider.submit("delete", PROJECT_TYPE, f"projects/{PROJECT}", {})
+        self.assertEqual(started.state, "running")
+        self.assertEqual(started.operation_name,
+                         f"resourcemanager-delete/projects/{PROJECT}/operations/accepted")
+        result = provider.poll_operation(started.operation_name)
+        self.assertEqual(result.state, "succeeded")
+        self.assertEqual([call[0] for call in transport.calls], ["GET", "GET"])
+
+    def test_project_delete_refuses_mismatched_project_or_attached_billing(self):
+        wrong_project = FakeTransport([
+            FakeResponse(200, {
+                "projectId": PROJECT,
+                "displayName": RUN,
+                "parent": "folders/999999",
+                "state": "ACTIVE",
+                "labels": {"lab_run_id": RUN},
+            }),
+        ])
+        with self.assertRaisesRegex(ProjectLifecycleError, "identity does not match"):
+            adapter(wrong_project).submit(
                 "delete", PROJECT_TYPE, f"projects/{PROJECT}", {}
             )
-        self.assertEqual(transport.calls, [])
+        self.assertEqual([call[0] for call in wrong_project.calls], ["GET"])
+
+        attached_billing = FakeTransport([
+            FakeResponse(200, {
+                "projectId": PROJECT,
+                "displayName": RUN,
+                "parent": PARENT,
+                "state": "ACTIVE",
+                "labels": {"lab_run_id": RUN},
+            }),
+            FakeResponse(200, {
+                "projectId": PROJECT,
+                "billingEnabled": True,
+                "billingAccountName": BILLING,
+            }),
+        ])
+        with self.assertRaisesRegex(ProjectLifecycleError, "detached billing"):
+            adapter(attached_billing).submit(
+                "delete", PROJECT_TYPE, f"projects/{PROJECT}", {}
+            )
+        self.assertEqual([call[0] for call in attached_billing.calls], ["GET", "GET"])
 
 
 if __name__ == "__main__":

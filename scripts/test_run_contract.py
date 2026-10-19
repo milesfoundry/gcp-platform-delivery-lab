@@ -141,6 +141,44 @@ def audit_receipt(sequence, phase, *, checks=None, result="passed", complete=Tru
     return receipt
 
 
+def retirement_operations():
+    operations = []
+    targets = [
+        ("gcp.billing.project_billing_info", "projects/" + PROJECT),
+        ("gcp.resourcemanager.project", "projects/" + PROJECT),
+    ]
+    for attempt, (resource_type, resource_id) in enumerate(targets, start=1):
+        action = "delete"
+        request_sha256 = hashlib.sha256(b"{}").hexdigest()
+        operation = operation_id(
+            RUN_ID, 1, action, resource_type, resource_id,
+            request_sha256, "project_retiring",
+        )
+        intent_event = {
+            "sequence": len(operations) + 1,
+            "kind": "intent",
+            "operation_id": operation,
+            "attempt": 1,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "request_sha256": request_sha256,
+            "phase": "project_retiring",
+            "at": f"2026-10-18T12:0{attempt}:00Z",
+        }
+        operations.append(intent_event)
+        operations.append({
+            "sequence": len(operations) + 1,
+            "kind": "result",
+            "operation_id": operation,
+            "outcome": "succeeded",
+            "provider_operation_name": None,
+            "response_sha256": "c" * 64,
+            "at": f"2026-10-18T12:0{attempt}:01Z",
+        })
+    return operations
+
+
 class RunIntentTests(unittest.TestCase):
     def test_approved_london_three_zone_intent_passes(self):
         self.assertEqual(validate_intent(intent(), now=NOW)["state"], "control_bootstrapping")
@@ -672,6 +710,7 @@ class ManifestTests(unittest.TestCase):
     def test_closed_requires_complete_independent_audit_and_empty_inventory(self):
         candidate = self.manifest()
         candidate["state"] = "closed"
+        candidate["operations"] = retirement_operations()
         for item in candidate["resources"]:
             item["status"] = "deleted"
         for item in candidate["controls"]:
@@ -704,6 +743,7 @@ class ManifestTests(unittest.TestCase):
         plan = cleanup_plan(candidate)
         self.assertNotIn("gcp.scheduler.job", [item["type"] for item in plan])
         candidate["state"] = "controls_reclaiming"
+        candidate["operations"] = retirement_operations()
         with self.assertRaises(ContractError):
             control_cleanup_plan(candidate)
         for item in candidate["resources"]:
@@ -734,13 +774,34 @@ class ManifestTests(unittest.TestCase):
         )
         self.assertEqual(next_state("incomplete", "cleaning"), "cleaning")
         self.assertEqual(
-            next_state("auditing", "controls_reclaiming"),
+            next_state("auditing", "project_retiring"),
+            "project_retiring",
+        )
+        self.assertEqual(
+            next_state("project_retiring", "controls_reclaiming"),
             "controls_reclaiming",
         )
+        with self.assertRaises(ContractError):
+            next_state("auditing", "controls_reclaiming")
         with self.assertRaises(ContractError):
             next_state("closed", "cleaning")
         with self.assertRaises(ContractError):
             next_state("ready", "provisioning")
+
+    def test_project_delete_must_follow_billing_unlink_result(self):
+        candidate = intent()
+        candidate["state"] = "project_retiring"
+        receipt = audit_receipt(1, "workload")
+        candidate["audit_receipts"] = [receipt]
+        candidate["independent_audit"] = _audit_summary(receipt)
+        operations = retirement_operations()
+        reordered = operations[2:] + operations[:2]
+        for index, event in enumerate(reordered, start=1):
+            event["sequence"] = index
+            event["at"] = f"2026-10-18T12:0{index}:00Z"
+        candidate["operations"] = reordered
+        with self.assertRaisesRegex(ContractError, "prior successful billing unlink"):
+            validate_manifest(candidate)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ from run_ledger import LedgerSnapshot, RunLedger
 
 FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 RECEIPT_STATES = frozenset(
-    {"running", "succeeded", "failed", "present", "absent", "unknown"}
+    {"running", "succeeded", "failed", "present", "absent", "retiring", "unknown"}
 )
 
 
@@ -205,7 +205,9 @@ class RecoveryController:
             raise ContractError("provider operation name changed during reconciliation")
 
         at = self.clock()
-        if receipt.state == "running":
+        if receipt.state == "retiring" and action != "delete":
+            return OperationExecution(snapshot, operation_id, "unresolved")
+        if receipt.state in {"running", "retiring"}:
             if not receipt.operation_name:
                 raise ContractError("running provider operation requires an operation name")
             snapshot = self.ledger.record_operation_progress(
