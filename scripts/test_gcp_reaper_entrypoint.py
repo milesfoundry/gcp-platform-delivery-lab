@@ -124,6 +124,19 @@ class GCPReaperEntrypointTests(unittest.TestCase):
         with self.assertRaisesRegex(ReaperEntrypointError, "does not match"):
             _verify_manifest_binding(manifest, foreign_config)
 
+    def test_manifest_binds_bucket_parent_and_identity_audience(self):
+        manifest = retirement_manifest()
+        for field, value in (
+            ("ledger_bucket_name", "other-ledger-private"),
+            ("parent", "organizations/999999"),
+            ("identity_audience", "other-audience"),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ReaperEntrypointError, "does not match"):
+                    _verify_manifest_binding(
+                        manifest, replace(self.config, **{field: value})
+                    )
+
     def test_not_retiring_state_does_not_acquire_lease_or_mutate(self):
         manifest = deepcopy(intent())
         ledger = FakeLedger(manifest)

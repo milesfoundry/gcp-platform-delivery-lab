@@ -14,7 +14,7 @@ import re
 from urllib.parse import quote, unquote
 
 
-SCHEMA = "portfolio.gcp-run.v2"
+SCHEMA = "portfolio.gcp-run.v3"
 MAX_RUN_LIFETIME = timedelta(minutes=60)
 MAX_OPERATION_ATTEMPTS = 3
 MAX_MANIFEST_RESOURCES = 512
@@ -31,6 +31,7 @@ CRC32C = re.compile(r"^[A-Za-z0-9+/]{6}==$")
 BILLING_ACCOUNT = re.compile(
     r"^billingAccounts/[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}$"
 )
+PARENT = re.compile(r"^(?:organizations|folders)/[0-9]{1,20}$")
 RETIREMENT_PRINCIPAL_ID = re.compile(
     r"^(?:google-user-[A-Za-z0-9._~-]{1,255}|google-service-account-[0-9]{1,30})$"
 )
@@ -279,8 +280,8 @@ def validate_intent(
     _only_keys(
         scope,
         {
-            "project_id", "recovery_project_id", "region", "zones",
-            "enabled_api_services",
+            "project_id", "recovery_project_id", "ledger_bucket_name",
+            "parent", "region", "zones", "enabled_api_services",
         },
         "scope",
     )
@@ -294,6 +295,19 @@ def validate_intent(
         raise ContractError("scope.recovery_project_id is invalid")
     if recovery_project_id == project_id:
         raise ContractError("run and recovery projects must be separate")
+    ledger_bucket_name = _string(
+        scope.get("ledger_bucket_name"), "scope.ledger_bucket_name"
+    )
+    if (
+        not BUCKET_NAME.fullmatch(ledger_bucket_name)
+        or len(ledger_bucket_name) > 63
+        or ledger_bucket_name.startswith("goog")
+        or "google" in ledger_bucket_name
+    ):
+        raise ContractError("scope.ledger_bucket_name is invalid")
+    parent = _string(scope.get("parent"), "scope.parent")
+    if not PARENT.fullmatch(parent):
+        raise ContractError("scope.parent must be a folder or organization resource name")
     if scope.get("region") != REGION:
         raise ContractError("scope.region must be the approved London region")
     zones = scope.get("zones")
@@ -416,7 +430,10 @@ def validate_intent(
     cleanup = _mapping(data.get("cleanup"), "cleanup")
     _only_keys(
         cleanup,
-        {"service_account", "identity_verified", "independent_recovery_verified"},
+        {
+            "service_account", "identity_audience", "identity_verified",
+            "independent_recovery_verified",
+        },
         "cleanup",
     )
     cleanup_account = _string(
@@ -430,6 +447,11 @@ def validate_intent(
         )
     if cleanup.get("identity_verified") is not True:
         raise ContractError("cleanup.identity_verified must be true")
+    identity_audience = _string(
+        cleanup.get("identity_audience"), "cleanup.identity_audience"
+    )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,511}", identity_audience):
+        raise ContractError("cleanup.identity_audience is malformed")
     if cleanup.get("independent_recovery_verified") is not True:
         raise ContractError("independent cleanup recovery must be verified")
 

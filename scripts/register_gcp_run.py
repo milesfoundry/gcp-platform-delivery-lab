@@ -118,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         name = object_name(run_id)
         if intent.get("scope", {}).get("recovery_project_id") != args.ledger_project_id:
             raise ValueError("ledger project must match the recovery project in the intent")
+        if intent["scope"]["ledger_bucket_name"] != args.ledger_bucket:
+            raise ValueError("ledger bucket must match the run intent")
         ledger = _build_ledger(
             credentials_file=args.credentials_file,
             ledger_bucket=args.ledger_bucket,

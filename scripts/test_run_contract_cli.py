@@ -14,11 +14,13 @@ def manifest():
     project = "sample-lab-123"
     run_id = "lab-20261018-a1b2"
     return {
-        "schema": "portfolio.gcp-run.v2",
+        "schema": "portfolio.gcp-run.v3",
         "run_id": run_id,
         "scope": {
             "project_id": project,
             "recovery_project_id": "recovery-lab-456",
+            "ledger_bucket_name": "portfolio-ledger-private",
+            "parent": "folders/123456",
             "region": "europe-west2",
             "enabled_api_services": [
                 "anthosconfigmanagement.googleapis.com",
@@ -56,6 +58,7 @@ def manifest():
         },
         "cleanup": {
             "service_account": f"{run_id}-reaper@recovery-lab-456.iam.gserviceaccount.com",
+            "identity_audience": "portfolio-reaper-v1",
             "identity_verified": True,
             "independent_recovery_verified": True,
         },

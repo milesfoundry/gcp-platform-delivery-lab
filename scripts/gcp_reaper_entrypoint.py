@@ -145,9 +145,12 @@ def _verify_manifest_binding(manifest: object, config: ReaperJobConfig) -> dict:
         run["run_id"] != config.run_id
         or run["scope"]["project_id"] != config.project_id
         or run["scope"]["recovery_project_id"] != config.recovery_project_id
+        or run["scope"]["ledger_bucket_name"] != config.ledger_bucket_name
+        or run["scope"]["parent"] != config.parent
         or tuple(run["scope"]["enabled_api_services"]) != config.enabled_services
         or run["finance"]["billing_account_id"] != config.billing_account_name
         or run["cleanup"]["service_account"] != config.expected_email
+        or run["cleanup"]["identity_audience"] != config.identity_audience
     ):
         raise ReaperEntrypointError(
             "per-run Job configuration does not match the durable run manifest"

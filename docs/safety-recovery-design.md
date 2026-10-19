@@ -829,8 +829,9 @@ CP-3. If they cannot, stop and get a concrete policy decision before activation.
 
 File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
 
-1. `scripts/run_contract.py` and its fixtures/tests: schema v2 now separates
-   recovery/workload projects and reaper identities, predeclares the per-run
+1. `scripts/run_contract.py` and its fixtures/tests: schema v3 separates
+   recovery/workload projects and reaper identities, binds the ledger bucket,
+   project parent and reaper identity audience, predeclares the per-run
    controls, models project/billing phases and audits controls separately from
    workload IDs. The contract carries distinct state/backup bucket identifiers,
    generation references and append-only restore-proof fields. Reject

@@ -27,11 +27,13 @@ RUN_ID = "lab-20261018-a1b2"
 
 def intent():
     return {
-        "schema": "portfolio.gcp-run.v2",
+        "schema": "portfolio.gcp-run.v3",
         "run_id": RUN_ID,
         "scope": {
             "project_id": PROJECT,
             "recovery_project_id": "recovery-lab-456",
+            "ledger_bucket_name": "portfolio-ledger-private",
+            "parent": "folders/123456",
             "region": "europe-west2",
             "enabled_api_services": [
                 "anthosconfigmanagement.googleapis.com",
@@ -73,6 +75,7 @@ def intent():
         },
         "cleanup": {
             "service_account": "lab-20261018-a1b2-reaper@recovery-lab-456.iam.gserviceaccount.com",
+            "identity_audience": "portfolio-reaper-v1",
             "identity_verified": True,
             "independent_recovery_verified": True,
         },
@@ -241,6 +244,29 @@ class RunIntentTests(unittest.TestCase):
         candidate["finance"]["billing_account_id"] = "not-an-account"
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
+
+    def test_schema_three_binds_recovery_bucket_project_parent_and_audience(self):
+        candidate = intent()
+        self.assertEqual(
+            validate_intent(candidate, now=NOW)["schema"], "portfolio.gcp-run.v3"
+        )
+        for field, value in (
+            ("ledger_bucket_name", "../ledger"),
+            ("parent", "folders/not-a-number"),
+        ):
+            changed = intent()
+            changed["scope"][field] = value
+            with self.subTest(scope_field=field), self.assertRaises(ContractError):
+                validate_intent(changed, now=NOW)
+        for value in ("", "not an audience", "../unsafe"):
+            changed = intent()
+            changed["cleanup"]["identity_audience"] = value
+            with self.subTest(audience=value), self.assertRaises(ContractError):
+                validate_intent(changed, now=NOW)
+        old_schema = intent()
+        old_schema["schema"] = "portfolio.gcp-run.v2"
+        with self.assertRaises(ContractError):
+            validate_intent(old_schema, now=NOW)
 
     def test_enabled_api_service_policy_must_be_sorted_unique_and_valid(self):
         for services in (

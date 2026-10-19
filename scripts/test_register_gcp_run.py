@@ -78,11 +78,16 @@ class RegisterGCPRunTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def _args(self, *, recovery_project_id="recovery-lab-456"):
+    def _args(
+        self,
+        *,
+        recovery_project_id="recovery-lab-456",
+        ledger_bucket="portfolio-ledger-private",
+    ):
         return [
             "--intent", str(self.intent_path),
             "--credentials-file", str(Path(self.temporary.name) / "human.json"),
-            "--ledger-bucket", "portfolio-ledger-private",
+            "--ledger-bucket", ledger_bucket,
             "--ledger-project-id", recovery_project_id,
             "--expected-email", "operator@example.com",
             "--expected-auditor-id", "google-user-12345678901234567890",
@@ -146,6 +151,20 @@ class RegisterGCPRunTests(unittest.TestCase):
         self.assertEqual(result, 2)
         build.assert_not_called()
         self.assertIn("must match the recovery project", stderr.getvalue())
+
+    def test_refuses_ledger_bucket_that_differs_from_the_manifest(self):
+        stderr = StringIO()
+        with (
+            patch("register_gcp_run._build_ledger") as build,
+            redirect_stderr(stderr),
+        ):
+            result = register_gcp_run.main(
+                self._args(ledger_bucket="other-ledger-private")
+            )
+
+        self.assertEqual(result, 2)
+        build.assert_not_called()
+        self.assertIn("ledger bucket", stderr.getvalue())
 
     def test_only_accepts_an_explicit_authorized_user_credential_file(self):
         credential_path = Path(self.temporary.name) / "human.json"
