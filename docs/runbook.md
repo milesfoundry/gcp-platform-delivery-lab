@@ -48,6 +48,11 @@ credential explicitly injected by a trusted caller. That caller must configure
 the required Google API scopes plus `openid` and `email` for UserInfo checks.
 The adapter refreshes the injected credential but does not discover credentials,
 select a workload identity, or qualify a deployment.
+This is currently a human-user verification path, not a Cloud Run janitor
+credential path. The scheduled Job needs a distinct per-run service-account
+identity, with both tokens sourced from Cloud Run's metadata service and the
+ID token bound to the same principal as the API access token. See the [required
+principal split](safety-recovery-design.md#reclaimer-principal-split--required-before-deployment).
 `gcp_cleanup_adapter.py` now implements a deletion-only adapter for exact
 Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GCS objects,
 GKE node-pool/cluster, and GKE Fleet membership/feature resources. It requires an

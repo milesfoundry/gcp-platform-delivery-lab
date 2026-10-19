@@ -294,6 +294,40 @@ programmatic budget-notification topics in a FinOps administration project.
 These are design capabilities, not proof that the current account has the
 required parent or billing permissions.
 
+### Reclaimer principal split — required before deployment
+
+The current `operator:project-reclaimer` implementation is a human-operated
+retirement path. It accepts only a Google user access token verified through
+UserInfo. It must not be used as the credential path for the scheduled Cloud
+Run janitor: Cloud Run calls Google APIs as its configured service-account
+service identity, and a human refresh token is neither that identity nor a
+durable unattended credential.
+
+Keep the human recovery operator as a separate, MFA-protected fallback and
+control-plane approver. The scheduled per-run janitor uses the unique
+service-account identity configured on its exact Cloud Run Job. The runtime
+must obtain both API access and service-account identity tokens from the Cloud
+Run metadata server, with a fixed configured audience for the identity token.
+Before any mutation or ledger write, verify the Google signature, issuer
+`https://accounts.google.com`, exact audience, expiry, verified service-account
+email and immutable numeric `sub` recorded in the run controls. Bind that proof
+to the same metadata service identity that provides the API access token; fail
+closed if either token, the email or numeric identity differs. Use a distinct
+ledger lease identity for the job, while preserving `operator:project-reclaimer`
+for the human recovery path. Never put a user refresh token in the Job or
+Scheduler configuration.
+
+This is the required implementation contract, not an implemented or qualified
+identity path. Its adapter tests must cover wrong audience, issuer, email,
+numeric subject, signature/expiry failure, access-token refresh failure and
+principal changes between API requests. Deployment must also prove that each
+job can access only its own ledger record and exact run project. Cloud Run
+service identity, token verification, IAM isolation and the independent janitor
+remain unimplemented and unqualified.
+
+This follows Google's documented [Cloud Run service identity](https://docs.cloud.google.com/run/docs/securing/service-identity)
+and [service-account ID token claims](https://docs.cloud.google.com/docs/authentication/token-types).
+
 ### Candidate API permission and authority matrix
 
 This matrix names the API permissions implied by the candidate operations. It is

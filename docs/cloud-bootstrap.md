@@ -74,6 +74,10 @@ adapter performs no Application Default Credentials lookup, credential-file
 discovery or login. It does not establish that the supplied credential came
 from an approved workload identity, nor does it configure IAM or deployment;
 trusted credential sourcing and deployed-runtime qualification remain open.
+This helper is not the scheduled Cloud Run janitor's identity solution: the
+current retirement adapter accepts human Google user tokens, while the Job must
+use its configured service-account identity. The exact split and verification
+contract are recorded in [the safety design](safety-recovery-design.md#reclaimer-principal-split--required-before-deployment).
 
 Both roots use local state paths under `.terraform/`. This is not runner-loss
 recovery. The candidate remote state bucket, separate private backup, durable
