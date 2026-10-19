@@ -24,6 +24,9 @@ RESOURCE_URI = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:/._@+=,-]{0,1023}$")
 GENERATION = re.compile(r"^[1-9][0-9]*$")
 BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]$")
 CRC32C = re.compile(r"^[A-Za-z0-9+/]{6}==$")
+BILLING_ACCOUNT = re.compile(
+    r"^billingAccounts/[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}$"
+)
 
 REGION = "europe-west2"
 ZONES = frozenset(
@@ -301,12 +304,19 @@ def validate_intent(
         {
             "currency", "gross_estimate_gbp", "net_cash_exposure_gbp",
             "available_credit_gbp", "credit_observed_at", "credit_expires_at",
-            "monthly_alert_threshold_gbp", "alerts_verified",
+            "monthly_alert_threshold_gbp", "alerts_verified", "billing_account_id",
         },
         "finance",
     )
     if finance.get("currency") != "GBP":
         raise ContractError("finance.currency must be GBP")
+    billing_account_id = _string(
+        finance.get("billing_account_id"), "finance.billing_account_id"
+    )
+    if not BILLING_ACCOUNT.fullmatch(billing_account_id):
+        raise ContractError(
+            "finance.billing_account_id must be a canonical Cloud Billing account name"
+        )
     _finite_positive_number(
         finance.get("gross_estimate_gbp"), "finance.gross_estimate_gbp"
     )

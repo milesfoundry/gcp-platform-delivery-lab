@@ -45,6 +45,7 @@ def intent():
         },
         "finance": {
             "currency": "GBP",
+            "billing_account_id": "billingAccounts/ABCDEF-123456-GHIJKL",
             "gross_estimate_gbp": 4.25,
             "net_cash_exposure_gbp": 0.0,
             "available_credit_gbp": 50,
@@ -132,6 +133,12 @@ class RunIntentTests(unittest.TestCase):
         candidate = intent()
         candidate["finance"]["available_credit_gbp"] = 0
         self.assertEqual(validate_intent(candidate, now=NOW)["run_id"], RUN_ID)
+
+    def test_billing_account_name_must_be_canonical(self):
+        candidate = intent()
+        candidate["finance"]["billing_account_id"] = "not-an-account"
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
 
     def test_wrong_region_or_zone_is_rejected(self):
         for field, value in (

@@ -30,6 +30,7 @@ def manifest():
         },
         "finance": {
             "currency": "GBP",
+            "billing_account_id": "billingAccounts/ABCDEF-123456-GHIJKL",
             "gross_estimate_gbp": 4.25,
             "net_cash_exposure_gbp": 0,
             "available_credit_gbp": 50,

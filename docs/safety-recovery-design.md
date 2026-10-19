@@ -534,6 +534,20 @@ Required manifest fields:
   real inventory, or principal-to-auditor binding. Service agents/API
   enablement, project/billing/budget checks, closure inventory, external audit
   identity, and the cleanup provider adapter remain open.
+  `scripts/closure_auditor.py` now defines a separate credential-free closure
+  report bound to the exact manifest. It requires complete project, billing,
+  run-project budget, Cloud Run, Scheduler and service-account coverage; records
+  both sides of the expected billing unlink; checks exact manifest control IDs;
+  and requires the earlier workload receipt to have passed. The manifest now
+  requires the canonical billing account name. The budget query is scoped to
+  `projects/{run_project_id}` so a complete empty result proves no project-scoped
+  budgets remain; the separately existing bootstrap-project budget is outside
+  this run-project scope and is not treated as run-owned. This is a normalized
+  evidence contract only: no live API adapter, IAM, principal binding, or
+  budget-object ownership reconciliation is qualified. See Google's
+  [project billing info](https://docs.cloud.google.com/billing/docs/reference/rest/v1/projects/getBillingInfo)
+  and [budget list scope](https://docs.cloud.google.com/billing/docs/reference/budget/rest/v1/billingAccounts.budgets/list)
+  references.
   The REST resource/response mapping follows Google's primary references for
   [Compute aggregated lists](https://docs.cloud.google.com/compute/docs/reference/rest/v1/addresses/aggregatedList),
   including [backend services](https://docs.cloud.google.com/compute/docs/reference/rest/v1/backendServices/aggregatedList),
