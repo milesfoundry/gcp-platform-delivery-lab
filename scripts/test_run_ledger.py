@@ -252,6 +252,50 @@ class RunLedgerTests(unittest.TestCase):
                 manifest=skipped,
             )
 
+        moved_backend = deepcopy(original.manifest)
+        moved_backend["terraform_state"]["backend"]["bucket"] = "other-state-bucket"
+        with self.assertRaises(LedgerConflict):
+            self.ledger.replace(
+                RUN_ID,
+                expected_generation=original.generation,
+                lease_owner="launcher",
+                manifest=moved_backend,
+            )
+
+    def test_restore_proof_history_is_append_only(self):
+        original = self.create_and_lease()
+        candidate = deepcopy(original.manifest)
+        proof = {
+            "snapshot": "current",
+            "state_generation": "12",
+            "backup_generation": "5",
+            "restored_generation": "8",
+            "verified_at": "2026-10-18T12:01:00Z",
+            "result": "passed",
+            "state_crc32c": "ImIEBA==",
+            "backup_crc32c": "ImIEBA==",
+            "restored_crc32c": "ImIEBA==",
+        }
+        candidate["terraform_state"]["restore_proofs"].append(proof)
+        recorded = self.ledger.replace(
+            RUN_ID,
+            expected_generation=original.generation,
+            lease_owner="launcher",
+            manifest=candidate,
+            now=self.now + timedelta(seconds=1),
+        )
+
+        erased = deepcopy(recorded.manifest)
+        erased["terraform_state"]["restore_proofs"] = []
+        with self.assertRaises(LedgerConflict):
+            self.ledger.replace(
+                RUN_ID,
+                expected_generation=recorded.generation,
+                lease_owner="launcher",
+                manifest=erased,
+                now=self.now + timedelta(seconds=2),
+            )
+
     def test_corrupt_and_duplicate_key_objects_fail_closed(self):
         with self.assertRaises(LedgerError):
             _decode_envelope(b'{"schema":"bad","schema":"duplicate"}')

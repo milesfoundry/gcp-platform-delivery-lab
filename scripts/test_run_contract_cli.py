@@ -43,6 +43,19 @@ def manifest():
             "identity_verified": True,
             "independent_recovery_verified": True,
         },
+        "terraform_state": {
+            "backend": {
+                "bucket": "run-state-lab-20261018-a1b2",
+                "object": f"runs/{run_id}/terraform.tfstate",
+                "generation": None,
+            },
+            "backup": {
+                "bucket": "portfolio-state-backup",
+                "object": f"runs/{run_id}/terraform.tfstate",
+                "generation": None,
+            },
+            "restore_proofs": [],
+        },
         "state": "cleaning",
         "controls": [
             {"type": "gcp.run.job", "id": f"projects/recovery-lab-456/locations/europe-west2/jobs/{run_id}-reaper", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},

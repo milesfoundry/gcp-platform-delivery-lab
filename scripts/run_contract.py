@@ -19,6 +19,8 @@ REVISION = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_DIGEST = re.compile(r"^ghcr\.io/[a-z0-9-]+/[a-z0-9-]+@sha256:[0-9a-f]{64}$")
 RESOURCE_URI = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:/._@+=,-]{0,1023}$")
 GENERATION = re.compile(r"^[1-9][0-9]*$")
+BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]$")
+CRC32C = re.compile(r"^[A-Za-z0-9+/]{6}==$")
 
 REGION = "europe-west2"
 ZONES = frozenset(
@@ -169,7 +171,7 @@ def validate_intent(
         {
             "schema", "run_id", "scope", "created_at", "deadline_at", "source",
             "finance", "cleanup", "state", "resources", "controls",
-            "independent_audit",
+            "independent_audit", "terraform_state",
         },
         "intent",
     )
@@ -230,6 +232,8 @@ def validate_intent(
     image = _string(source.get("image_digest"), "source.image_digest")
     if not IMAGE_DIGEST.fullmatch(image):
         raise ContractError("source.image_digest must be an immutable GHCR digest")
+
+    _validate_terraform_state(data.get("terraform_state"), run_id)
 
     finance = _mapping(data.get("finance"), "finance")
     _only_keys(
@@ -332,6 +336,84 @@ def validate_intent(
         if data.get("resources") != []:
             raise ContractError("new intent must have an empty workload resource list")
     return data
+
+
+def _validate_terraform_state(value: object, run_id: str) -> None:
+    """Validate exact backend/backup object references and restore evidence."""
+    state = _mapping(value, "terraform_state")
+    _only_keys(state, {"backend", "backup", "restore_proofs"}, "terraform_state")
+    expected_object = f"runs/{run_id}/terraform.tfstate"
+    bucket_names = set()
+    for field in ("backend", "backup"):
+        entry = _mapping(state.get(field), f"terraform_state.{field}")
+        _only_keys(entry, {"bucket", "object", "generation"}, f"terraform_state.{field}")
+        bucket = _string(entry.get("bucket"), f"terraform_state.{field}.bucket")
+        if (
+            not BUCKET_NAME.fullmatch(bucket)
+            or len(bucket) > 63
+            or bucket.startswith("goog")
+            or "google" in bucket
+        ):
+            raise ContractError(f"terraform_state.{field}.bucket is invalid")
+        if bucket in bucket_names:
+            raise ContractError("Terraform state and backup buckets must be distinct")
+        bucket_names.add(bucket)
+        if entry.get("object") != expected_object:
+            raise ContractError(
+                f"terraform_state.{field}.object must be the exact run-scoped state path"
+            )
+        generation = entry.get("generation")
+        if generation is not None and (
+            not isinstance(generation, str) or not GENERATION.fullmatch(generation)
+        ):
+            raise ContractError(
+                f"terraform_state.{field}.generation must be null or a positive generation string"
+            )
+
+    proofs = state.get("restore_proofs")
+    if not isinstance(proofs, list) or len(proofs) > 32:
+        raise ContractError("terraform_state.restore_proofs must contain at most 32 records")
+    seen_proofs = set()
+    for index, raw in enumerate(proofs):
+        proof = _mapping(raw, f"terraform_state.restore_proofs[{index}]")
+        _only_keys(
+            proof,
+            {
+                "snapshot", "state_generation", "backup_generation",
+                "restored_generation", "verified_at", "result",
+                "state_crc32c", "backup_crc32c", "restored_crc32c",
+            },
+            f"terraform_state.restore_proofs[{index}]",
+        )
+        snapshot = proof.get("snapshot")
+        if not isinstance(snapshot, str) or snapshot not in {"current", "previous"}:
+            raise ContractError("restore proof snapshot must be current or previous")
+        for key in ("state_generation", "backup_generation", "restored_generation"):
+            generation = proof.get(key)
+            if not isinstance(generation, str) or not GENERATION.fullmatch(generation):
+                raise ContractError(f"restore proof {key} must be a positive generation string")
+        proof_identity = (
+            snapshot,
+            proof["state_generation"],
+            proof["backup_generation"],
+            proof["restored_generation"],
+        )
+        if proof_identity in seen_proofs:
+            raise ContractError("restore proof generation tuple must be unique")
+        seen_proofs.add(proof_identity)
+        _timestamp(proof.get("verified_at"), f"restore_proofs[{index}].verified_at")
+        if not isinstance(proof.get("result"), str) or proof["result"] not in {
+            "passed", "failed"
+        }:
+            raise ContractError("restore proof result must be passed or failed")
+        checksums = [proof.get(key) for key in (
+            "state_crc32c", "backup_crc32c", "restored_crc32c"
+        )]
+        if any(not isinstance(checksum, str) or not CRC32C.fullmatch(checksum)
+               for checksum in checksums):
+            raise ContractError("restore proof CRC32C values must be base64-encoded checksums")
+        if proof["result"] == "passed" and len(set(checksums)) != 1:
+            raise ContractError("passed restore proof requires matching state, backup, and restore checksums")
 
 
 def _validate_controls(

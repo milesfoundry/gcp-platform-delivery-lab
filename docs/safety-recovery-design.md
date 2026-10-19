@@ -413,12 +413,31 @@ IAM and GCS control plane are available; total recovery-project loss requires
 the independent backup operator and copy. The ledger remains separate and
 contains no secret, kubeconfig, Terraform state, plan, raw log or profile binary.
 
+Schema v2 now carries a `terraform_state` record with exact backend and backup
+bucket names, the same run-scoped state object path, observed object generation
+slots, and append-only restore-proof entries. Each proof identifies whether the
+current or previous snapshot was restored, its source/backup/restored object
+generations, verification timestamp, outcome and the three matching GCS CRC32C
+checksums. The validator rejects shared backend/backup bucket names, non-run
+object paths, malformed generation/checksum values and mismatched checksums on
+a passed proof. The ledger also makes bucket/object identity immutable and
+restore evidence append-only. This is contract enforcement only: it neither
+provisions or reads buckets nor proves separate administrators, retention,
+versioning, encryption, backup delivery or a successful real restore. Those
+remain required owner review and live qualification gates.
+The syntax check intentionally excludes dotted bucket names; Google also
+requires bucket names to be globally unique and rejects reserved `goog`/`google`
+names ([Cloud Storage bucket naming requirements](https://docs.cloud.google.com/storage/docs/buckets)).
+
 Required manifest fields:
 
 - Schema/version, random run ID, dedicated project ID, London region and allowed
   zones; fixed creation/deadline timestamps and maximum lifetime.
 - Exact Terraform source revision, image digest, plan checksum, Config Sync/image
   tool versions and reviewed intent checksum.
+- `terraform_state`: distinct exact backend and backup bucket/object references,
+  observed object generations and append-only current/previous restore proofs;
+  separate project ownership and real backup/restore qualification remain gates.
 - State, state generation, lease owner/expiry, last heartbeat and monotonic event
   sequence. Schema v2 starts at `control_bootstrapping`, then records `prepared`,
   `project_create_requested`, `project_created`, `billing_link_requested`,
@@ -514,8 +533,10 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    unauthorized project transitions. `scripts/run_contract_cli.py` emits only
    exact-ID dry-run plans. `scripts/run_ledger.py` implements create-only and
    generation-conditional exact-path manifest storage, bounded event history,
-   and CAS leases with a fake-store suite; state-backup metadata and restore
-   proof still need contract implementation.
+   and CAS leases with a fake-store suite. The manifest now records exact
+   backend/backup paths and append-only current/previous restore proof metadata;
+   bucket isolation, backup administration, versioning/retention and actual
+   restore remain unqualified.
 2. `bootstrap/terraform/`: now owns only persistent bootstrap-project APIs,
    GitHub federation, cost-alert scaffolding and lifecycle alert policies; it
    no longer owns run APIs, node identity or the Config Sync Feature. Still

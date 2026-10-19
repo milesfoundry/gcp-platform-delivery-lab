@@ -429,6 +429,19 @@ class RunLedger:
         for key in ("schema", "scope", "created_at", "deadline_at", "source"):
             if candidate.get(key) != current.manifest.get(key):
                 raise LedgerConflict(f"replacement cannot change immutable field {key}")
+        for role in ("backend", "backup"):
+            for key in ("bucket", "object"):
+                if (
+                    candidate["terraform_state"][role][key]
+                    != current.manifest["terraform_state"][role][key]
+                ):
+                    raise LedgerConflict(
+                        f"replacement cannot change Terraform state {role} {key}"
+                    )
+        old_proofs = current.manifest["terraform_state"]["restore_proofs"]
+        new_proofs = candidate["terraform_state"]["restore_proofs"]
+        if new_proofs[:len(old_proofs)] != old_proofs:
+            raise LedgerConflict("Terraform state restore proof history is append-only")
         if current.generation != expected_generation:
             if (
                 candidate == current.manifest

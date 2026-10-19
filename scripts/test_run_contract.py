@@ -54,6 +54,19 @@ def intent():
             "identity_verified": True,
             "independent_recovery_verified": True,
         },
+        "terraform_state": {
+            "backend": {
+                "bucket": "run-state-lab-20261018-a1b2",
+                "object": f"runs/{RUN_ID}/terraform.tfstate",
+                "generation": None,
+            },
+            "backup": {
+                "bucket": "portfolio-state-backup",
+                "object": f"runs/{RUN_ID}/terraform.tfstate",
+                "generation": None,
+            },
+            "restore_proofs": [],
+        },
         "state": "control_bootstrapping",
         "resources": [],
         "controls": [
@@ -106,6 +119,46 @@ class RunIntentTests(unittest.TestCase):
                 validate_intent(candidate, now=NOW)
         candidate = intent()
         candidate["scope"]["project_id"] = "other-project!"
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
+
+    def test_state_backup_references_are_distinct_exact_and_generation_safe(self):
+        candidate = intent()
+        self.assertEqual(validate_intent(candidate, now=NOW)["run_id"], RUN_ID)
+        candidate["terraform_state"]["backup"]["bucket"] = (
+            candidate["terraform_state"]["backend"]["bucket"]
+        )
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
+
+        for role, field, value in (
+            ("backend", "object", "runs/another-run/terraform.tfstate"),
+            ("backup", "generation", True),
+            ("backend", "bucket", "../unsafe"),
+            ("backup", "bucket", "goog-state-backup"),
+            ("backup", "bucket", "google-state-backup"),
+        ):
+            candidate = intent()
+            candidate["terraform_state"][role][field] = value
+            with self.subTest(role=role, field=field), self.assertRaises(ContractError):
+                validate_intent(candidate, now=NOW)
+
+    def test_state_restore_proofs_validate_generation_and_crc32c_evidence(self):
+        candidate = intent()
+        proof = {
+            "snapshot": "current",
+            "state_generation": "12",
+            "backup_generation": "5",
+            "restored_generation": "8",
+            "verified_at": "2026-10-18T12:10:00Z",
+            "result": "passed",
+            "state_crc32c": "ImIEBA==",
+            "backup_crc32c": "ImIEBA==",
+            "restored_crc32c": "ImIEBA==",
+        }
+        candidate["terraform_state"]["restore_proofs"] = [proof]
+        self.assertEqual(validate_intent(candidate, now=NOW)["run_id"], RUN_ID)
+        candidate["terraform_state"]["restore_proofs"][0]["restored_crc32c"] = "ImIEBw=="
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
 
