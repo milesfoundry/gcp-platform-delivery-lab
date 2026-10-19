@@ -503,7 +503,9 @@ Required manifest fields:
   audit and final project/billing/control closure are separate receipts; a
   closure receipt cannot precede a passed workload receipt. Never store raw
   provider listings, bearer credentials or sensitive Terraform values in the
-  manifest.
+  manifest. The ledger rejects receipt edits and freezes the manifest after
+  `closed`; only a separately authenticated adapter can establish that the
+  named auditor lease belongs to a genuinely independent identity.
 - Gross cost estimate, measured gross usage, currency, credit balance/expiry
   observation time, net-cash estimate and later billing reconciliation reference.
 - Immutable links/checksums to sanitized evidence and an explicit limitation list.

@@ -851,6 +851,16 @@ class RunLedgerTests(unittest.TestCase):
             [item["phase"] for item in closed.manifest["audit_receipts"]],
             ["workload", "closure"],
         )
+        changed = deepcopy(closed.manifest)
+        changed["finance"]["available_credit_gbp"] += 1
+        with self.assertRaises(LedgerConflict):
+            self.ledger.replace(
+                RUN_ID,
+                expected_generation=closed.generation,
+                lease_owner="auditor:external-auditor",
+                manifest=changed,
+                now=self.now + timedelta(seconds=40),
+            )
 
     def test_corrupt_and_duplicate_key_objects_fail_closed(self):
         with self.assertRaises(LedgerError):

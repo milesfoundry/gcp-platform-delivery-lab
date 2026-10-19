@@ -493,6 +493,8 @@ class RunLedger:
             "independent_audit"
         ) != current.manifest.get("independent_audit"):
             raise LedgerConflict("independent audit summary can change only with a receipt")
+        if current.manifest["state"] == "closed" and candidate != current.manifest:
+            raise LedgerConflict("closed run manifests are immutable")
         if current.generation != expected_generation:
             if (
                 candidate == current.manifest
