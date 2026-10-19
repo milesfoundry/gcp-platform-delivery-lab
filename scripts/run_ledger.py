@@ -517,9 +517,34 @@ class RunLedger:
         must first be reconciled by exact resource ID after any interruption.
         """
         self._validate_generation(expected_generation)
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+            raise ContractError("provider operation attempt must be a positive integer")
+        if (
+            not isinstance(request_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", request_sha256) is None
+        ):
+            raise ContractError("provider request fingerprint must be a SHA-256 hex digest")
         at = now or self._clock()
         current = self.read(run_id)
         self._require_active_lease(current, lease_owner, at)
+        prior_attempts = [
+            event
+            for event in current.manifest["operations"]
+            if event["kind"] == "intent"
+            and event["attempt"] == attempt
+            and event["action"] == action
+            and event["resource_type"] == resource_type
+            and event["resource_id"] == resource_id
+        ]
+        if prior_attempts:
+            prior = prior_attempts[-1]
+            if prior["request_sha256"] != request_sha256:
+                raise LedgerConflict("provider attempt already has a different request")
+            # The current lifecycle phase may have advanced while this request
+            # was unresolved. Return the original intent for reconciliation;
+            # callers must not interpret this replay as permission to call GCP.
+            return current
+
         phase = current.manifest["state"]
         op_id = operation_id(
             run_id, attempt, action, resource_type, resource_id, request_sha256, phase

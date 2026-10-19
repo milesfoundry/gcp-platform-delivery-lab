@@ -246,6 +246,19 @@ class RunLedgerTests(unittest.TestCase):
         )
         self.assertEqual(recorded.manifest["operations"][0]["operation_id"], op_id)
         self.assertEqual(recorded.manifest["operations"][0]["kind"], "intent")
+        for bad_attempt, bad_fingerprint in ((True, request_sha), (1, "not-a-digest")):
+            with self.subTest(attempt=bad_attempt, fingerprint=bad_fingerprint), self.assertRaises(ContractError):
+                self.ledger.record_operation_intent(
+                    RUN_ID,
+                    expected_generation=recorded.generation,
+                    lease_owner="launcher",
+                    attempt=bad_attempt,
+                    action="create",
+                    resource_type="gcp.compute.network",
+                    resource_id=resource_id,
+                    request_sha256=bad_fingerprint,
+                    now=self.now + timedelta(seconds=9),
+                )
 
         # Lost ledger response retry returns the same pending intent and cannot
         # append a second request or change its deterministic identity.
@@ -313,6 +326,18 @@ class RunLedgerTests(unittest.TestCase):
             request_sha256=request_sha,
             now=self.now + timedelta(seconds=8),
         )
+        with self.assertRaises(LedgerConflict):
+            self.ledger.record_operation_intent(
+                RUN_ID,
+                expected_generation=recorded.generation,
+                lease_owner="launcher",
+                attempt=1,
+                action="create",
+                resource_type="gcp.compute.network",
+                resource_id=resource_id,
+                request_sha256="d" * 64,
+                now=self.now + timedelta(seconds=9),
+            )
         with self.assertRaises(ContractError):
             self.ledger.record_operation_intent(
                 RUN_ID,
@@ -359,12 +384,21 @@ class RunLedgerTests(unittest.TestCase):
             owner="reaper",
             now=self.now + timedelta(minutes=3),
         )
+        incomplete = deepcopy(takeover.manifest)
+        incomplete["state"] = "incomplete"
+        takeover = self.ledger.replace(
+            RUN_ID,
+            expected_generation=takeover.generation,
+            lease_owner="reaper",
+            manifest=incomplete,
+            now=self.now + timedelta(minutes=3, seconds=1),
+        )
         with self.assertRaises(LedgerConflict):
             self.ledger.assert_active_lease(
                 RUN_ID,
                 expected_generation=pending.generation,
                 owner="launcher",
-                now=self.now + timedelta(minutes=3, seconds=1),
+                now=self.now + timedelta(minutes=3, seconds=2),
             )
         reconciled_intent = self.ledger.record_operation_intent(
             RUN_ID,
@@ -375,9 +409,10 @@ class RunLedgerTests(unittest.TestCase):
             resource_type="gcp.compute.network",
             resource_id=resource_id,
             request_sha256=request_sha,
-            now=self.now + timedelta(minutes=3, seconds=1),
+            now=self.now + timedelta(minutes=3, seconds=2),
         )
         self.assertEqual(reconciled_intent.manifest["operations"], pending.manifest["operations"])
+        self.assertEqual(reconciled_intent.manifest["state"], "incomplete")
         found = provider.get(resource_id)
         self.assertEqual(found["status"], "present")
         completed = self.ledger.record_operation_result(

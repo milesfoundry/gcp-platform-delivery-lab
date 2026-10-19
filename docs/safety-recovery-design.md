@@ -409,6 +409,9 @@ another attempt for the same target. Repeated intent/result writes reconcile the
 same deterministic record after a lost ledger response. Fake-provider tests
 model a create that commits while its response is lost, lease takeover and
 read-only lookup by the exact intended ID; they assert no duplicate create.
+The original operation ID and authorization phase remain addressable if a
+takeover first marks the run `incomplete`; replay returns the pending record
+for reconciliation and does not authorize another provider call.
 The journal is still an adapter contract: it does not call GCP, fence an
 in-flight request or prove real provider discovery semantics.
 `RunLedger.assert_active_lease` re-reads the exact object and checks owner,
