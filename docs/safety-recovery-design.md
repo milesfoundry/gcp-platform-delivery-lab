@@ -46,8 +46,8 @@ post-deadline audit and retirement window, not a one-shot expiry trigger:
 `jobs.run` dispatches a Cloud Run Job execution, while this entrypoint can exit
 successfully without mutation when the durable state is not yet eligible. Keep
 the trigger until the independent closure audit permits control reclamation;
-the ledger lease prevents concurrent invocations from submitting duplicate
-operations. See Google's [Cloud Run Job execution
+each Cloud Run execution holds its own execution-scoped ledger lease, so only
+one fresh invocation can mutate the run at a time. See Google's [Cloud Run Job execution
 API](https://docs.cloud.google.com/run/docs/execute/jobs) and [Cloud Scheduler
 run method](https://docs.cloud.google.com/scheduler/docs/reference/rest/v1/projects.locations.jobs/run).
 Keep Terraform state in a private per-run GCS bucket in the recovery project,
@@ -60,6 +60,23 @@ do not claim recovery from total project/control-plane loss. The recovery
 project, ledger, state buckets, images, per-run Jobs/Schedulers and audit
 procedure have ongoing cost. Measure and alert on them, and assign their owner,
 retention, private backup, and eventual project-close procedure.
+
+The source implementation is `recovery/terraform`. It creates the per-run
+reaper and Scheduler service accounts, the digest-pinned Cloud Run Job, an
+exact-Job `roles/run.invoker` grant, a five-minute London Scheduler trigger,
+and exact-manifest-object GCS access. The reaper Job is single-task, single
+parallel, has a 90-second timeout below its two-minute ledger lease, and has
+zero task retries; later Scheduler polls resume from the ledger. Terraform
+requires a separately provisioned private per-run state
+bucket through `-backend-config` using `backend.hcl.example`; it must be in the
+recovery project, have uniform bucket-level access, and stay separate from the
+ledger. Verify the manifest bucket is also in the recovery project with uniform
+bucket-level access before applying its conditional IAM grant.
+Project-retirement IAM is disabled by default because the run project does not
+exist when controls are bootstrapped. Enable that phase only after the project
+exists and custom-role permission support is approved. Job deletion protection
+also remains on until reviewed control reclamation. This Terraform source is a
+candidate for hosted validation; it has not been applied or cloud-qualified.
 
 Recovery bootstrap must be registered before its first create. Write a
 create-only `control_bootstrapping` manifest with deterministic expected Job,

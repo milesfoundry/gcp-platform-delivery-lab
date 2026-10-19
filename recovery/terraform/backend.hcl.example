@@ -1,0 +1,5 @@
+# Pass this partial configuration to `terraform init -backend-config=backend.hcl`.
+# Create a private per-run state bucket before initialization. Do not use the
+# manifest ledger bucket for Terraform state.
+bucket = "REPLACE_WITH_PRIVATE_PER_RUN_STATE_BUCKET"
+prefix = "recovery/REPLACE_WITH_RUN_ID"

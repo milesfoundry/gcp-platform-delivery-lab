@@ -120,13 +120,16 @@ jobs:
           terraform_version: 1.16.4
       - run: python3 -m pip install -r scripts/requirements-recovery.txt
       - run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
-      - run: terraform fmt -check -recursive infrastructure bootstrap
+      - run: terraform fmt -check -recursive infrastructure bootstrap recovery
       - run: terraform -chdir=bootstrap/terraform init -input=false -lockfile=readonly
       - run: terraform -chdir=bootstrap/terraform validate
       - run: terraform -chdir=bootstrap/terraform test
       - run: terraform -chdir=infrastructure/lab init -input=false -lockfile=readonly
       - run: terraform -chdir=infrastructure/lab validate
       - run: terraform -chdir=infrastructure/lab test
+      - run: terraform -chdir=recovery/terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=recovery/terraform validate
+      - run: terraform -chdir=recovery/terraform test
       - name: Render disjoint Config Sync owners
         run: |
           python3 -m pip install PyYAML==6.0.2
