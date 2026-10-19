@@ -30,8 +30,17 @@ provider operation name for accepted asynchronous requests without marking them
 complete; only a terminal result resolves an intent. The credential-free
 `recovery_controller.py` submits once or resumes by polling/inspecting through
 an injected provider adapter, and can run ordered cleanup against that adapter.
-It has no GCP adapter and cannot create resources itself. No cloud resource
-creation is authorized by these files.
+`gcp_cleanup_adapter.py` now implements a deletion-only adapter for exact
+Compute network/subnetwork/router/NAT, GKE node-pool/cluster, and GKE Fleet
+membership/feature resources. It requires an explicitly supplied short-lived
+token source and transport; it does not discover credentials. Mocked tests cover
+request paths, project/run boundaries, async-operation scope, router fingerprint
+updates, and the cluster-protection review gate. The adapter has not been wired
+to the ledger controller or deployed identities. Its cluster review callback is
+an external gate, not proof that API deletion protection was disabled.
+Independent provider discovery/audit, unsupported Pub/Sub/Storage cleanup,
+API-to-ledger principal binding, IAM isolation and live provider behavior remain
+unqualified. No cloud resource creation is authorized by these files.
 Fake controller tests cover a create committed before a lost response,
 cross-run project-ID rejection before provider access, and repeated cleanup
 after a confirmed delete without a second delete call. These verify the local
@@ -52,8 +61,8 @@ tests cover create and delete response loss, cross-run project-ID rejection
 before provider access, and repeated cleanup after a confirmed delete without a
 second delete call. These verify the local ledger/controller contract only;
 they do not establish Google IAM isolation or real provider behavior.
-Independent discovery/audit, control reclamation and a real provider adapter
-remain unimplemented.
+Independent discovery/audit, control reclamation and production wiring for the
+provider adapter remain unimplemented.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources
@@ -130,12 +139,12 @@ because validate passes. Required outstanding gates:
    separate recovery controls and workload inventory, but do not call Google
    APIs or prove cross-run IAM denial. No reaper may be enabled until project
    creation, lowest-grant scopes, provider calls and negative cross-run tests pass.
-5. Configure and qualify the generation-conditional GCS ledger, then implement
-   the GCP provider adapter, operation controller and out-of-band reaper. Extend
-   fake-provider drills to delayed responses, create/delete loss and independent
-   inventory before a separately approved bounded cloud drill. Use the private
-   remote state and restore procedure, not local job state. Cluster deletion
-   protection must be changed explicitly for an approved teardown.
+5. Configure and qualify the generation-conditional GCS ledger, wire the
+   deletion-only adapter into the controller, and deploy the out-of-band reaper.
+   Extend provider drills to delayed responses and independent inventory before
+   a separately approved bounded cloud drill. Use private remote state and its
+   restore procedure, not local job state. Verify and change cluster deletion
+   protection explicitly for an approved teardown.
 6. Add application cloud IAM, Pub/Sub/GCS resources and adapters, image release
    provenance, network policies and workload deployment.
 

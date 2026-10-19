@@ -727,8 +727,18 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    application/ledger contract, not proof of Google IAM cross-run denial. Fake
    cleanup also covers provider deletion followed by a lost response: takeover
    inspects the exact ID, records absence and does not submit a second delete.
-   Independently discovered inventory, the real provider adapter and actual IAM
-   boundary remain open before hosted cleanup credentials are added.
+   `scripts/gcp_cleanup_adapter.py` adds a deletion-only REST adapter for
+   Compute network/subnetwork/router/NAT, GKE node-pool/cluster, and Fleet
+   membership/feature resources. Its injectable transport and explicit short-
+   lived token source have local mock tests for exact target paths, URL and
+   project/run boundaries, long-running operation scope, router fingerprint
+   updates, and an exact-cluster protection review gate. It cannot create
+   resources; unsupported Pub/Sub/Storage types fail closed. The adapter is not
+   wired to `RecoveryController`, a deployed identity or a live provider. The
+   cluster gate is only an external predicate; it does not inspect or disable
+   GKE deletion protection. Independently discovered inventory, API-to-ledger
+   principal binding, full resource-matrix coverage and the actual IAM boundary
+   remain open before hosted cleanup credentials are added.
 6. `.github/workflows/validate.yaml` remains credential-free for CI and runs
    schema, Terraform-render, cleanup, state, and negative-boundary checks. Add
    lifecycle workflow only after the reaper and cleanup path are deployed and
