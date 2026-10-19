@@ -78,9 +78,10 @@ exact-run project creation, reviewed billing association/removal, API enablement
 for the manifest's sorted allowlist, and post-audit project deletion. It uses an
 explicit short-lived token source and HTTPS transport, with fake tests for exact
 IDs, parent, run labels, billing account and operation scope. Retirement
-requires a verified human principal. It is not wired to a deployed launcher or
-live GCP identity. Its presence does not authorize cloud activation; no cloud
-API call is made by CI or this runbook.
+requires a verified human principal or the matching per-run Cloud Run service
+account. It is not wired to a deployed launcher or live GCP identity. Its
+presence does not authorize cloud activation; no cloud API call is made by CI
+or this runbook.
 Fake controller tests cover a create committed before a lost response,
 cross-run project-ID rejection before provider access, and repeated cleanup
 after a confirmed delete without a second delete call. These verify the local
@@ -114,6 +115,17 @@ mutation adapter are not wired together in a deployed identity or live GCP
 environment. The source-level reclaimer factory wires one token source and
 identity transport through GCS and provider requests; credential sourcing,
 control reclamation and live provider qualification remain open.
+
+`gcp_reaper_entrypoint.py` is the source-level Cloud Run Job entrypoint for the
+final project-retirement phase. Its fixed per-run environment is checked against
+the exact durable manifest before lease acquisition. It will not act before
+the manifest deadline, before a passed independent workload audit, or outside
+`project_retiring` (with a narrowly resumable prior retirement recorded as
+`incomplete`). It unlinks the declared billing account before deleting the
+exact project and leaves recovery-control reclamation to a separate closure
+audit. This does not perform workload cleanup, collect independent evidence,
+provision a Job/Scheduler, or establish IAM. It is source-only and fake-tested;
+no live Cloud Run or GCP identity qualification has occurred.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources
