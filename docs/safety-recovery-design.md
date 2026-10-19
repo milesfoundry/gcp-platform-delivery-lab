@@ -111,9 +111,11 @@ The recovery path is:
    records the no-project audit and reclaims its Scheduler, Job and identities.
 4. For project-create or billing-link requests with a lost response, the project/
    billing operator reconciles by the fixed project ID and billing account. The
-   reaper has read-only exact-ID project lookup and no project/billing mutation
-   authority. Ambiguous project or billing state remains `incomplete` until the
-   operator reconciles it; no API enablement or workload creation continues.
+   per-run reaper can only unlink billing and delete that exact project after a
+   passed workload audit and empty inventory; it cannot create projects, attach
+   billing, or change project IAM. Ambiguous create/link state remains
+   `incomplete` until the operator reconciles it; no API enablement or workload
+   creation continues.
 5. If the recovery project itself is lost, recreate its control plane from
    reviewed infrastructure source, restore the manifest/state backup, inspect
    every recorded run project through read-only service APIs, then resume cleanup
@@ -346,9 +348,10 @@ the ID token's signature/audience/issuer/expiry/email/numeric subject, and bind
 that proof to the access token from the same default service identity. The GCS
 credential wrapper and project lifecycle adapter accept that verified principal.
 Retirement leases now distinguish `operator:project-reclaimer` with a human
-user from `janitor:google-service-account-{numeric-sub}` with the exact service
-account; operation records and the manifest contract preserve one principal
-across billing unlink and project deletion. Fake tests cover wrong audience,
+user from `janitor:google-service-account-{numeric-sub}:{execution-id}`; the
+execution ID is unique to one Cloud Run Job execution while the operation
+records preserve the verified service-account principal across billing unlink
+and project deletion. Fake tests cover wrong audience,
 issuer, email, numeric subject, expiry, access-token mismatch, refresh failure,
 principal change, and lease/principal mismatch. The Google signature verifier
 itself and metadata server have not been exercised in Cloud Run. Deployment
@@ -479,8 +482,10 @@ history is never truncated; a full record stops mutation for operator review.
 The GCS object's generation returned by the provider is the authoritative
 generation token and is carried by the in-memory ledger snapshot, not guessed
 or copied into the object payload.
-This lease arbitrates manifest writers only; it does not fence an already-sent
-Google Cloud request. Before a recovery controller performs any resource
+Each Cloud Run execution uses a unique lease owner containing its injected
+`CLOUD_RUN_EXECUTION` name, so overlapping Scheduler dispatches do not share a
+lease identity. This lease arbitrates manifest writers only; it does not fence
+an already-sent Google Cloud request. Before a recovery controller performs any resource
 operation, it must persist the exact operation intent and deterministic resource
 ID, recheck lease ownership immediately before the call, record the response, and
 reconcile unresolved requests by exact ID after takeover. Cleanup must keep
@@ -657,9 +662,10 @@ Required manifest fields:
   workload audit and empty workload inventory. The ledger requires a successful
   billing unlink before it accepts a project-delete intent. Either the manual
   `operator:project-reclaimer` lease with its verified human user or the exact
-  per-run `janitor:google-service-account-{numeric-sub}` lease may record those
-  operations. The stable principal ID is retained on the operation intent, and
-  the same identity check runs on every project-retirement API call. Project deletion stays
+  per-run `janitor:google-service-account-{numeric-sub}:{execution-id}` lease
+  may record those operations. The stable principal ID is retained on the
+  operation intent, and the same identity check runs on every project-retirement
+  API call. Project deletion stays
   `running` while the exact project is `DELETE_REQUESTED` and resolves only on
   exact 404. The transition to `controls_reclaiming` requires resolved billing
   unlink and project deletion; `closed` still requires the independent full
@@ -791,7 +797,7 @@ CP-3. If they cannot, stop and get a concrete policy decision before activation.
 | Expiry fires while run is only `prepared` | Reaper confirms no project-create request and no project at the exact ID, records empty run-project audit and alerts; operator removes recovery controls and independent auditor closes |
 | Runner dies after create succeeds but before ID write | Discover exact run-labeled/deterministically named resource; record then delete; if lookup is ambiguous, halt as incomplete |
 | Scheduler invocation or Cloud Run execution fails | Retry boundedly, preserve run; next interval resumes from recorded state; notify failure without closing |
-| Duplicate/concurrent reaper execution | One CAS lease wins; stale generation cannot mutate/delete; idempotent delete tolerates already-absent owned resource |
+| Duplicate/concurrent reaper execution | Each Cloud Run execution has a unique lease owner; one CAS lease wins while active, stale generations cannot mutate the manifest, and idempotent delete tolerates already-absent owned resources. Lease expiry does not cancel a request already sent to Google Cloud; the next invocation reconciles its exact operation intent before retrying. |
 | Runner loses local Terraform state | Reaper cleans exact manifest-discovered resources without reading state; owner restores state from the private versioned bucket/independent backup; retain the run as incomplete until restored state and inventory reconcile |
 | Terraform destroy partially fails | Preserve state and failures; retry exact dependencies; never remove finalizers or broad-delete project resources |
 | Required API/IAM permission missing | Fail preflight before first billable resource when possible; mid-run mark incomplete, notify, retain recovery path |

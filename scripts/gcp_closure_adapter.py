@@ -374,7 +374,7 @@ def collect_closure_report(
         raise ClosureCollectionError("an explicit non-empty bearer token is required")
     cleanup_principal = run["cleanup"]["service_account"]
     scheduler_principal = (
-        f"{run['run_id']}-scheduler@{recovery_project_id}.iam.gserviceaccount.com"
+        f"{run['run_id']}-sched@{recovery_project_id}.iam.gserviceaccount.com"
     )
     if expected_auditor_email in {cleanup_principal, scheduler_principal}:
         raise ClosureCollectionError(

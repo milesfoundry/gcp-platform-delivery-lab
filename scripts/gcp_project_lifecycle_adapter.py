@@ -21,10 +21,11 @@ from gcp_token_identity import (
     verify_access_token_principal,
 )
 from recovery_controller import ProviderReceipt
+from run_contract import retirement_lease_matches_principal
 
 
 PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
-RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$")
+RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,17}[a-z0-9])?$")
 BILLING_ACCOUNT = re.compile(
     r"^billingAccounts/[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}$"
 )
@@ -124,21 +125,31 @@ class GCPProjectLifecycleAdapter:
         """Bind retirement lease use to its configured, verified principal."""
         if action != "delete" or resource_type not in {PROJECT_TYPE, BILLING_TYPE}:
             return None
-        if lease_owner != "operator:project-reclaimer" and not re.fullmatch(
-            r"janitor:google-service-account-[0-9]{1,30}",
-            lease_owner if isinstance(lease_owner, str) else "",
+        if (
+            lease_owner != "operator:project-reclaimer"
+            and not (
+                isinstance(lease_owner, str)
+                and lease_owner.startswith("operator:")
+            )
+            and not retirement_lease_matches_principal(
+                lease_owner, self._project_reclaimer_auditor_id
+            )
         ):
             raise ProjectLifecycleError(
-                "project retirement requires the named project-reclaimer lease or per-run janitor lease"
+                "per-run janitor lease does not match its configured principal or execution ID"
             )
+        if (
+            isinstance(lease_owner, str)
+            and lease_owner.startswith("operator:")
+            and lease_owner != "operator:project-reclaimer"
+        ):
+            raise ProjectLifecycleError("project retirement requires the named project-reclaimer lease")
         token = self._access_token()
         principal = self._verify_project_reclaimer(token)
         if lease_owner == "operator:project-reclaimer":
             if not principal.auditor_id.startswith("google-user-"):
                 raise ProjectLifecycleError("human project-reclaimer lease requires a verified Google user")
-        elif lease_owner != f"janitor:{principal.auditor_id}" or not principal.auditor_id.startswith(
-            "google-service-account-"
-        ):
+        elif not retirement_lease_matches_principal(lease_owner, principal.auditor_id):
             raise ProjectLifecycleError("janitor lease does not match its verified service-account principal")
         return principal
 

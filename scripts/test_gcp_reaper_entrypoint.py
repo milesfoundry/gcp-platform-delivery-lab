@@ -12,6 +12,7 @@ from gcp_reaper_entrypoint import (
     ReaperEntrypointError,
     _verify_manifest_binding,
     execute_project_retirement,
+    main,
     parse_job_config,
 )
 from run_contract import _audit_summary
@@ -111,6 +112,12 @@ class GCPReaperEntrypointTests(unittest.TestCase):
         with self.assertRaisesRegex(ReaperEntrypointError, "sorted unique"):
             parse_job_config(values)
 
+    def test_missing_execution_id_fails_before_runtime_construction(self):
+        constructed = []
+        with self.assertRaisesRegex(ReaperEntrypointError, "execution ID"):
+            main(env_values(), runtime_factory=lambda config: constructed.append(config))
+        self.assertEqual(constructed, [])
+
     def test_manifest_mismatch_is_rejected(self):
         manifest = retirement_manifest()
         foreign_config = replace(self.config, project_id="foreign-lab-456")
@@ -124,6 +131,7 @@ class GCPReaperEntrypointTests(unittest.TestCase):
         outcome = execute_project_retirement(
             SimpleNamespace(ledger=ledger, controller=controller),
             self.config,
+            execution_id="run-abc-123",
             now=NOW,
         )
         self.assertEqual(outcome, "waiting_for_independent_audit_or_prior_phase")
@@ -136,6 +144,7 @@ class GCPReaperEntrypointTests(unittest.TestCase):
         outcome = execute_project_retirement(
             SimpleNamespace(ledger=ledger, controller=controller),
             self.config,
+            execution_id="run-abc-123",
             now=datetime(2026, 10, 18, 12, 49, tzinfo=timezone.utc),
         )
         self.assertEqual(outcome, "before_run_deadline")
@@ -148,6 +157,7 @@ class GCPReaperEntrypointTests(unittest.TestCase):
         outcome = execute_project_retirement(
             SimpleNamespace(ledger=ledger, controller=controller),
             self.config,
+            execution_id="run-abc-123",
             now=NOW,
         )
         self.assertEqual(
@@ -162,7 +172,7 @@ class GCPReaperEntrypointTests(unittest.TestCase):
             all(call[1]["resource_id"] == f"projects/{PROJECT_ID}" for call in controller.calls)
         )
         self.assertEqual(ledger.acquired[0][1]["owner"],
-                         "janitor:google-service-account-12345678901234567890")
+                         "janitor:google-service-account-12345678901234567890:run-abc-123")
 
     def test_failed_billing_unlink_stops_before_project_delete(self):
         ledger = FakeLedger(retirement_manifest())
@@ -170,6 +180,7 @@ class GCPReaperEntrypointTests(unittest.TestCase):
         outcome = execute_project_retirement(
             SimpleNamespace(ledger=ledger, controller=controller),
             self.config,
+            execution_id="run-abc-123",
             now=NOW,
         )
         self.assertEqual(outcome, "billing_unlink_pending_or_incomplete")

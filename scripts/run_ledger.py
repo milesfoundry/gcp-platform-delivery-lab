@@ -27,6 +27,7 @@ from run_contract import (
     MAX_OPERATION_ATTEMPTS,
     RETIREMENT_PRINCIPAL_ID,
     RUN_ID,
+    janitor_lease_principal,
     _audit_summary,
     next_state,
     operation_id,
@@ -41,7 +42,7 @@ MAX_EVENTS = 1024
 MAX_LEASE = timedelta(minutes=5)
 MIN_LEASE = timedelta(seconds=15)
 OWNER = re.compile(
-    r"^(?:launcher|reaper|operator:[a-z0-9._-]{1,64}|janitor:google-service-account-[0-9]{1,30}|auditor:"
+    r"^(?:launcher|reaper|operator:[a-z0-9._-]{1,64}|janitor:google-service-account-[0-9]{1,30}:[a-z0-9-]{1,63}|auditor:"
     r"google-user-[A-Za-z0-9._~-]{1,255})$"
 )
 EVENT_TYPES = frozenset(
@@ -657,7 +658,7 @@ class RunLedger:
                 "gcp.resourcemanager.project",
             }
             and lease_owner != "operator:project-reclaimer"
-            and not re.fullmatch(r"janitor:google-service-account-[0-9]{1,30}", lease_owner)
+            and janitor_lease_principal(lease_owner) is None
         ):
             raise LedgerConflict(
                 "project retirement requires the named project-reclaimer lease"

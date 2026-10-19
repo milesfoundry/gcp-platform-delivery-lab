@@ -439,7 +439,7 @@ class GCPProjectLifecycleAdapterTests(unittest.TestCase):
             project_reclaimer_auditor_id="google-service-account-12345678901234567890",
         )
         actor = provider.authorize_actor(
-            "janitor:google-service-account-12345678901234567890",
+            "janitor:google-service-account-12345678901234567890:run-abc-1",
             "delete",
             PROJECT_TYPE,
         )
@@ -447,7 +447,7 @@ class GCPProjectLifecycleAdapterTests(unittest.TestCase):
         self.assertEqual(source.verified_tokens, ["cloud-run-access-token"])
         with self.assertRaisesRegex(ProjectLifecycleError, "does not match"):
             provider.authorize_actor(
-                "janitor:google-service-account-99999999999999999999",
+                "janitor:google-service-account-99999999999999999999:run-abc-1",
                 "delete",
                 PROJECT_TYPE,
             )
@@ -458,7 +458,7 @@ class GCPProjectLifecycleAdapterTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ProjectLifecycleError, "configured principal"):
             provider.authorize_actor(
-                "janitor:google-service-account-99999999999999999999",
+                "janitor:google-service-account-99999999999999999999:run-abc-1",
                 "delete",
                 PROJECT_TYPE,
             )

@@ -41,6 +41,13 @@ access token from the same metadata service identity. The ledger and project
 adapter accept either verified principal under its matching retirement lease.
 The source is fake-tested only: there is no Cloud Run deployment, metadata
 server qualification or IAM isolation proof.
+Per-run service-account names use the `-reaper` and `-sched` suffixes. The run
+ID limit reserves space for both names within Google's service-account name
+limit. Each Cloud Run reaper execution leases as
+`janitor:<service-account-principal-id>:<CLOUD_RUN_EXECUTION>`; this unique
+execution suffix fences overlapping Scheduler invocations that share a service
+account ([Cloud Run container contract](https://docs.cloud.google.com/run/docs/container-contract)).
+The Job fails closed if `CLOUD_RUN_EXECUTION` is missing or malformed.
 `ExplicitGoogleCredentialTokenSource` is an optional adapter for a Google auth
 credential explicitly injected by a trusted caller. That caller must configure
 the required Google API scopes plus `openid` and `email` for UserInfo checks.

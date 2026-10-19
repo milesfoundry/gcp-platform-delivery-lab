@@ -78,7 +78,7 @@ def manifest():
             {"type": "gcp.run.job", "id": f"projects/recovery-lab-456/locations/europe-west2/jobs/{run_id}-reaper", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
             {"type": "gcp.scheduler.job", "id": f"projects/recovery-lab-456/locations/europe-west2/jobs/{run_id}-expiry", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
             {"type": "gcp.iam.service_account", "id": f"projects/recovery-lab-456/serviceAccounts/{run_id}-reaper@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
-            {"type": "gcp.iam.service_account", "id": f"projects/recovery-lab-456/serviceAccounts/{run_id}-scheduler@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+            {"type": "gcp.iam.service_account", "id": f"projects/recovery-lab-456/serviceAccounts/{run_id}-sched@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
         ],
         "resources": [
             {

@@ -145,7 +145,7 @@ def assess_closure(manifest: object, report: object) -> AuditAssessment:
         raise AuditReportError("closure auditor_email must be a verified user email")
     cleanup_principal = run["cleanup"]["service_account"]
     scheduler_principal = (
-        f"{run['run_id']}-scheduler@{run['scope']['recovery_project_id']}"
+        f"{run['run_id']}-sched@{run['scope']['recovery_project_id']}"
         ".iam.gserviceaccount.com"
     )
     if auditor_email in {cleanup_principal, scheduler_principal}:

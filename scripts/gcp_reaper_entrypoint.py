@@ -25,13 +25,14 @@ from run_contract import ContractError, validate_manifest
 
 
 _PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
-_RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$")
+_RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,17}[a-z0-9])?$")
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.iam\.gserviceaccount\.com$")
 _BUCKET = re.compile(r"^[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]$")
 _PARENT = re.compile(r"^(?:folders|organizations)/[0-9]{1,20}$")
 _BILLING = re.compile(r"^billingAccounts/[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}$")
 _AUDIENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,511}$")
 _NUMERIC_ID = re.compile(r"^[0-9]{1,30}$")
+_EXECUTION_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 class ReaperEntrypointError(RuntimeError):
@@ -195,12 +196,15 @@ def execute_project_retirement(
     runtime: ProjectReclaimerRuntime,
     config: ReaperJobConfig,
     *,
+    execution_id: str,
     now: datetime | None = None,
 ) -> str:
     """Run only the manifest-authorized billing unlink and project deletion."""
     at = now or datetime.now(timezone.utc)
     if at.tzinfo is None or at.utcoffset() is None:
         raise ReaperEntrypointError("job clock must include a timezone")
+    if not isinstance(execution_id, str) or _EXECUTION_ID.fullmatch(execution_id) is None:
+        raise ReaperEntrypointError("Cloud Run execution ID is missing or invalid")
     snapshot = runtime.ledger.read(config.run_id)
     run = _verify_manifest_binding(snapshot.manifest, config)
     prior_retirement = any(
@@ -232,7 +236,7 @@ def execute_project_retirement(
     if at.astimezone(timezone.utc) < deadline:
         return "before_run_deadline"
 
-    lease_owner = f"janitor:{config.expected_auditor_id}"
+    lease_owner = f"janitor:{config.expected_auditor_id}:{execution_id}"
     leased = runtime.ledger.acquire_lease(
         config.run_id,
         expected_generation=snapshot.generation,
@@ -313,8 +317,14 @@ def main(
 ) -> str:
     """Cloud Run Job entry; logs a bounded outcome and propagates safe errors."""
     config = parse_job_config(os.environ if environ is None else environ)
+    values = os.environ if environ is None else environ
+    execution_id = values.get("CLOUD_RUN_EXECUTION", "")
+    if _EXECUTION_ID.fullmatch(execution_id) is None:
+        raise ReaperEntrypointError("Cloud Run execution ID is missing or invalid")
     runtime = runtime_factory(config)
-    outcome = execute_project_retirement(runtime, config, now=now)
+    outcome = execute_project_retirement(
+        runtime, config, execution_id=execution_id, now=now
+    )
     print(json.dumps({"schema": "portfolio.reaper.v1", "run_id": config.run_id,
                       "outcome": outcome}, sort_keys=True))
     return outcome

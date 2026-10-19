@@ -14,6 +14,7 @@ from run_contract import (
     next_state,
     operation_id,
     retirement_lease_matches_principal,
+    RUN_ID as RUN_ID_PATTERN,
     validate_intent,
     validate_manifest,
 )
@@ -95,7 +96,7 @@ def intent():
             {"type": "gcp.run.job", "id": "projects/recovery-lab-456/locations/europe-west2/jobs/lab-20261018-a1b2-reaper", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
             {"type": "gcp.scheduler.job", "id": "projects/recovery-lab-456/locations/europe-west2/jobs/lab-20261018-a1b2-expiry", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
             {"type": "gcp.iam.service_account", "id": "projects/recovery-lab-456/serviceAccounts/lab-20261018-a1b2-reaper@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
-            {"type": "gcp.iam.service_account", "id": "projects/recovery-lab-456/serviceAccounts/lab-20261018-a1b2-scheduler@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+            {"type": "gcp.iam.service_account", "id": "projects/recovery-lab-456/serviceAccounts/lab-20261018-a1b2-sched@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
         ],
     }
 
@@ -190,7 +191,13 @@ class RetirementPrincipalLeaseTests(unittest.TestCase):
         )
         self.assertTrue(
             retirement_lease_matches_principal(
-                "janitor:google-service-account-12345678901234567890",
+                "janitor:google-service-account-12345678901234567890:run-abc-1",
+                "google-service-account-12345678901234567890",
+            )
+        )
+        self.assertTrue(
+            retirement_lease_matches_principal(
+                "janitor:google-service-account-12345678901234567890:run-abc-2",
                 "google-service-account-12345678901234567890",
             )
         )
@@ -202,14 +209,20 @@ class RetirementPrincipalLeaseTests(unittest.TestCase):
         )
         self.assertFalse(
             retirement_lease_matches_principal(
-                "janitor:google-service-account-12345678901234567890",
+                "janitor:google-service-account-12345678901234567890:run-abc-1",
                 "google-service-account-99999999999999999999",
             )
         )
         self.assertFalse(
             retirement_lease_matches_principal(
-                "janitor:google-service-account-12345678901234567890",
+                "janitor:google-service-account-12345678901234567890:run-abc-1",
                 "google-user-12345678901234567890",
+            )
+        )
+        self.assertFalse(
+            retirement_lease_matches_principal(
+                "janitor:google-service-account-12345678901234567890",
+                "google-service-account-12345678901234567890",
             )
         )
 
@@ -264,6 +277,14 @@ class RunIntentTests(unittest.TestCase):
         candidate["scope"]["project_id"] = "other-project!"
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
+
+    def test_run_id_maximum_fits_deterministic_service_account_names(self):
+        maximum = "lab-" + "a" * 19
+        too_long = "lab-" + "a" * 20
+        self.assertIsNotNone(RUN_ID_PATTERN.fullmatch(maximum))
+        self.assertLessEqual(len(f"{maximum}-reaper"), 30)
+        self.assertLessEqual(len(f"{maximum}-sched"), 30)
+        self.assertIsNone(RUN_ID_PATTERN.fullmatch(too_long))
 
     def test_state_backup_references_are_distinct_exact_and_generation_safe(self):
         candidate = intent()
@@ -767,7 +788,7 @@ class ManifestTests(unittest.TestCase):
     def test_bootstrap_or_ledger_resources_are_never_in_run_cleanup(self):
         candidate = self.manifest()
         candidate["resources"].append(
-            resource("gcp.scheduler.job", RUN_ID + "-scheduler")
+            resource("gcp.scheduler.job", RUN_ID + "-expiry")
         )
         candidate["resources"].append(
             resource("gcp.run.job", RUN_ID + "-reaper")

@@ -902,7 +902,7 @@ class RunLedgerTests(unittest.TestCase):
             now=self.now + timedelta(seconds=33),
         )
         principal_id = "google-service-account-12345678901234567890"
-        lease_owner = f"janitor:{principal_id}"
+        lease_owner = f"janitor:{principal_id}:run-abc-123"
         janitor = self.ledger.acquire_lease(
             RUN_ID,
             expected_generation=workload.generation,

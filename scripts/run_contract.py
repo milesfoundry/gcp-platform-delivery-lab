@@ -20,7 +20,7 @@ MAX_OPERATION_ATTEMPTS = 3
 MAX_MANIFEST_RESOURCES = 512
 MAX_DISCOVERY_RECEIPTS = 64
 MAX_DISCOVERED_PER_RECEIPT = 256
-RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$")
+RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,17}[a-z0-9])?$")
 PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_DIGEST = re.compile(r"^ghcr\.io/[a-z0-9-]+/[a-z0-9-]+@sha256:[0-9a-f]{64}$")
@@ -142,14 +142,18 @@ def retirement_lease_matches_principal(lease_owner: str, principal_id: str) -> b
             isinstance(principal_id, str)
             and principal_id.startswith("google-user-")
         )
-    prefix = "janitor:"
-    return (
-        isinstance(lease_owner, str)
-        and lease_owner.startswith(prefix)
-        and isinstance(principal_id, str)
-        and principal_id.startswith("google-service-account-")
-        and lease_owner[len(prefix):] == principal_id
+    return janitor_lease_principal(lease_owner) == principal_id
+
+
+def janitor_lease_principal(lease_owner: object) -> str | None:
+    """Extract the principal from a unique Cloud Run execution lease owner."""
+    if not isinstance(lease_owner, str):
+        return None
+    match = re.fullmatch(
+        r"janitor:(google-service-account-[0-9]{1,30}):([a-z0-9-]{1,63})",
+        lease_owner,
     )
+    return match.group(1) if match else None
 
 
 def _mapping(value: object, field: str) -> dict:
@@ -889,7 +893,7 @@ def _validate_controls(
             if not resource_id.endswith(
                 (
                     f"/{run_id}-reaper@{recovery_project_id}.iam.gserviceaccount.com",
-                    f"/{run_id}-scheduler@{recovery_project_id}.iam.gserviceaccount.com",
+                    f"/{run_id}-sched@{recovery_project_id}.iam.gserviceaccount.com",
                 )
             ):
                 raise ContractError("service account id must use a deterministic run name")

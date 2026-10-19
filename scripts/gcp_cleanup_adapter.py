@@ -23,7 +23,7 @@ from recovery_controller import ProviderReceipt
 
 FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
-RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$")
+RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,17}[a-z0-9])?$")
 ZONES = frozenset({"europe-west2-a", "europe-west2-b", "europe-west2-c"})
 SUPPORTED_TYPES = frozenset(
     {
