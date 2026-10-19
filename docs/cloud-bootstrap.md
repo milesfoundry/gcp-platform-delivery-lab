@@ -80,17 +80,15 @@ Cloud Run metadata credentials and a verified service-account ID token. Neither
 path is deployed or IAM-qualified. The exact split and verification contract
 are recorded in [the safety design](safety-recovery-design.md#reclaimer-principal-split--required-before-deployment).
 
-Both roots use local state paths under `.terraform/`. This is not runner-loss
-recovery. The candidate remote state bucket, separate private backup, durable
-manifest and independent janitor are still absent. Never upload either root's
-state as an Actions artifact/cache. Preserve state until independent inventory
-and billing audit pass; then retain it under the future state-retention policy.
-
-The lab root's local backend path is `.terraform/ephemeral-lab.tfstate`; the
-bootstrap root uses `.terraform/ephemeral-bootstrap.tfstate`. Credential-free CI
-initializes these local backends for schema/tests but never applies or reads live
-state. Terraform state contains sensitive resource details: never publish state,
-saved plans or credential caches.
+The bootstrap and lab roots declare partial GCS backends. Their bucket and
+project settings are supplied at init time from a generated, secret-free HCL
+file; credentials must be supplied separately by a future, explicitly qualified
+runner. The lab path is `runs/<run-id>/terraform/default.tfstate`, matching the
+GCS backend's default workspace object. Credential-free CI uses
+`terraform init -backend=false`, so it does not contact GCS. No bucket is
+provisioned and no live remote init or apply path is qualified yet. The separate
+private backup, durable manifest integration and independent janitor also remain
+open. Never upload state, plans or credential caches as Actions artifacts/cache.
 
 ## Activation sequence
 
@@ -105,7 +103,8 @@ Once cloud settings are approved and access is verified:
 3. The per-run project launcher, recovery controls, state backup, budget
    delivery and independent cleanup path must be implemented and qualified before
    any lab project is created. No current Terraform path performs that lifecycle.
-4. Confirm both roots use local state and neither uploads state to artifacts/cache.
+4. Confirm both roots use their approved GCS buckets and neither uploads state
+   to artifacts/cache.
 5. Review the separate provisioner, reaper, project/billing and auditor roles;
    their exact scopes and the dedicated lifecycle workflow.
 6. Test budget and lifecycle notification delivery plus token acceptance/rejection

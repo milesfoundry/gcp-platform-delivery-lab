@@ -88,13 +88,13 @@ def intent():
             "backend": {
                 "project_id": "recovery-lab-456",
                 "bucket": "run-state-lab-20261018-a1b2",
-                "object": f"runs/{RUN_ID}/terraform.tfstate",
+                "object": f"runs/{RUN_ID}/terraform/default.tfstate",
                 "generation": None,
             },
             "backup": {
                 "project_id": "portfolio-state-789",
                 "bucket": "portfolio-state-backup",
-                "object": f"runs/{RUN_ID}/terraform.tfstate",
+                "object": f"runs/{RUN_ID}/terraform/default.tfstate",
                 "generation": None,
             },
             "restore_proofs": [],
@@ -380,7 +380,7 @@ class RunIntentTests(unittest.TestCase):
             validate_intent(candidate, now=NOW)
 
         for role, field, value in (
-            ("backend", "object", "runs/another-run/terraform.tfstate"),
+            ("backend", "object", "runs/another-run/terraform/default.tfstate"),
             ("backup", "generation", True),
             ("backend", "bucket", "../unsafe"),
             ("backup", "bucket", "goog-state-backup"),
@@ -414,7 +414,7 @@ class RunIntentTests(unittest.TestCase):
         candidate["terraform_state"]["restore_proofs"] = [proof]
         self.assertEqual(validate_intent(candidate, now=NOW)["run_id"], RUN_ID)
         candidate["terraform_state"]["restore_proofs"][0]["restored_object"] = (
-            f"runs/{RUN_ID}/terraform.tfstate"
+            f"runs/{RUN_ID}/terraform/default.tfstate"
         )
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)

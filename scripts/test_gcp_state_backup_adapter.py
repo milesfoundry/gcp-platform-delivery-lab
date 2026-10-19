@@ -95,7 +95,7 @@ class StateBackupAdapterTests(unittest.TestCase):
         }
         self.source = {
             "bucket": "run-state-lab-20261018-a1b2",
-            "name": "runs/lab-20261018-a1b2/terraform.tfstate",
+            "name": "runs/lab-20261018-a1b2/terraform/default.tfstate",
             "generation": "12", "crc32c": "ImIEBA==", "size": "314",
         }
         self.transport.objects[(self.source["bucket"], self.source["name"], "12")] = self.source
@@ -108,7 +108,7 @@ class StateBackupAdapterTests(unittest.TestCase):
             "done": True,
             "resource": {
                 "bucket": "portfolio-state-backup",
-                "name": "runs/lab-20261018-a1b2/terraform.tfstate",
+                "name": "runs/lab-20261018-a1b2/terraform/default.tfstate",
                 "generation": "25", "crc32c": "ImIEBA==", "size": "314",
             },
         })
@@ -132,7 +132,7 @@ class StateBackupAdapterTests(unittest.TestCase):
     def test_restore_targets_new_object_and_uses_exact_backup_generation(self):
         backup_object = {
             "bucket": "portfolio-state-backup",
-            "name": "runs/lab-20261018-a1b2/terraform.tfstate",
+            "name": "runs/lab-20261018-a1b2/terraform/default.tfstate",
             "generation": "25", "crc32c": "ImIEBA==", "size": "314",
         }
         self.transport.objects[
@@ -160,7 +160,7 @@ class StateBackupAdapterTests(unittest.TestCase):
 
     def test_rejects_active_backend_or_backup_as_restore_destination_before_writes(self):
         for name in (
-            "runs/lab-20261018-a1b2/terraform.tfstate",
+            "runs/lab-20261018-a1b2/terraform/default.tfstate",
             "runs/lab-20261018-a1b2/restore-proofs/../../terraform.tfstate",
         ):
             with self.assertRaises(StateBackupError):
@@ -179,7 +179,7 @@ class StateBackupAdapterTests(unittest.TestCase):
     def test_rejects_checksum_mismatch_before_restore_copy(self):
         backup_object = {
             "bucket": "portfolio-state-backup",
-            "name": "runs/lab-20261018-a1b2/terraform.tfstate",
+            "name": "runs/lab-20261018-a1b2/terraform/default.tfstate",
             "generation": "25", "crc32c": "wrong==", "size": "314",
         }
         self.transport.objects[
@@ -196,7 +196,7 @@ class StateBackupAdapterTests(unittest.TestCase):
     def test_backup_reconciles_a_committed_copy_after_response_loss(self):
         copied = {
             "bucket": "portfolio-state-backup",
-            "name": "runs/lab-20261018-a1b2/terraform.tfstate",
+            "name": "runs/lab-20261018-a1b2/terraform/default.tfstate",
             "generation": "25", "crc32c": "ImIEBA==", "size": "314",
             "metadata": {
                 "portfolioRunId": "lab-20261018-a1b2",
@@ -216,7 +216,7 @@ class StateBackupAdapterTests(unittest.TestCase):
     def test_backup_does_not_reconcile_a_different_runs_copy(self):
         copied = {
             "bucket": "portfolio-state-backup",
-            "name": "runs/lab-20261018-a1b2/terraform.tfstate",
+            "name": "runs/lab-20261018-a1b2/terraform/default.tfstate",
             "generation": "25", "crc32c": "ImIEBA==", "size": "314",
             "metadata": {
                 "portfolioRunId": "another-run",
@@ -231,7 +231,7 @@ class StateBackupAdapterTests(unittest.TestCase):
     def test_restore_reconciles_a_committed_recovery_copy_after_response_loss(self):
         backup = {
             "bucket": "portfolio-state-backup",
-            "name": "runs/lab-20261018-a1b2/terraform.tfstate",
+            "name": "runs/lab-20261018-a1b2/terraform/default.tfstate",
             "generation": "25", "crc32c": "ImIEBA==", "size": "314",
         }
         restored = {
@@ -257,7 +257,7 @@ class StateBackupAdapterTests(unittest.TestCase):
     def test_qualifies_current_and_previous_state_generations(self):
         previous = {
             "bucket": "run-state-lab-20261018-a1b2",
-            "name": "runs/lab-20261018-a1b2/terraform.tfstate",
+            "name": "runs/lab-20261018-a1b2/terraform/default.tfstate",
             "generation": "8", "crc32c": "ImIEBA==", "size": "300",
         }
         self.transport.objects[(previous["bucket"], previous["name"], "8")] = previous
@@ -267,7 +267,7 @@ class StateBackupAdapterTests(unittest.TestCase):
                 "done": True,
                 "resource": {
                     "bucket": "portfolio-state-backup",
-                    "name": "runs/lab-20261018-a1b2/terraform.tfstate",
+                    "name": "runs/lab-20261018-a1b2/terraform/default.tfstate",
                     "generation": destination_generation,
                     "crc32c": "ImIEBA==",
                     "size": "300" if generation == "8" else "314",

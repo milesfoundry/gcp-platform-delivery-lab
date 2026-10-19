@@ -539,7 +539,7 @@ def _validate_terraform_state(
     """Validate exact backend/backup object references and restore evidence."""
     state = _mapping(value, "terraform_state")
     _only_keys(state, {"backend", "backup", "restore_proofs"}, "terraform_state")
-    expected_object = f"runs/{run_id}/terraform.tfstate"
+    expected_object = f"runs/{run_id}/terraform/default.tfstate"
     bucket_names = set()
     for field in ("backend", "backup"):
         entry = _mapping(state.get(field), f"terraform_state.{field}")

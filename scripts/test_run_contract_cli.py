@@ -72,13 +72,13 @@ def manifest():
             "backend": {
                 "project_id": "recovery-lab-456",
                 "bucket": "run-state-lab-20261018-a1b2",
-                "object": f"runs/{run_id}/terraform.tfstate",
+                "object": f"runs/{run_id}/terraform/default.tfstate",
                 "generation": None,
             },
             "backup": {
                 "project_id": "portfolio-state-789",
                 "bucket": "portfolio-state-backup",
-                "object": f"runs/{run_id}/terraform.tfstate",
+                "object": f"runs/{run_id}/terraform/default.tfstate",
                 "generation": None,
             },
             "restore_proofs": [],

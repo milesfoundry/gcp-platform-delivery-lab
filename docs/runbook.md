@@ -17,8 +17,9 @@ destination generation preconditions, checks owning projects, UBLA, public acces
 prevention, versioning and non-zero retention, and restores only to a new
 run-scoped object. Its fake transport tests are source qualification only; it has
 no launcher/ledger integration, separate-operator IAM proof, configured buckets
-or real restore receipt. Terraform roots still use local backends. Do not treat
-this adapter as authorization to copy or restore state.
+or real restore receipt. Bootstrap and lab now declare partial GCS backends, but
+only backendless CI initialization is qualified. Do not treat this adapter as
+authorization to copy or restore state.
 The read-only `gcp_inventory_adapter.py` collects the 25 workload surfaces using
 an explicitly supplied bearer token and injected GET-only transport.
 `gcp_closure_adapter.py` collects project, billing, API, service-account,
@@ -198,14 +199,18 @@ TEST_DATABASE_URL='postgres://workshop:local-demo-only@127.0.0.1:5432/workshop?s
 cd ..
 terraform fmt -check -recursive infrastructure bootstrap
 python3 -m unittest discover -s scripts -p 'test_*.py' -v
-terraform -chdir=bootstrap/terraform init -input=false -lockfile=readonly
+terraform -chdir=bootstrap/terraform init -backend=false -input=false -lockfile=readonly
 terraform -chdir=bootstrap/terraform validate
 terraform -chdir=bootstrap/terraform test
-terraform -chdir=infrastructure/lab init -input=false -lockfile=readonly
+terraform -chdir=infrastructure/lab init -backend=false -input=false -lockfile=readonly
 terraform -chdir=infrastructure/lab validate
 terraform -chdir=infrastructure/lab test
 python3 scripts/check-ownership.py
 ```
+
+These checks deliberately disable the declared GCS backends. A live backend
+initialization needs the approved bucket, a generated backend config, and an
+explicitly qualified credential source; that path has not been enabled.
 
 The integration URL is illustrative: start a dedicated PostgreSQL test instance
 or use the hosted workflow's isolated service. The default application Compose

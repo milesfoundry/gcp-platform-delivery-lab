@@ -175,7 +175,7 @@ Inventory supplements these checks because it can lag.
 | Per-run Cloud Scheduler job and invocation identity — recovery-project control-plane owner | Unique scheduler and service account in the recovery project, fixed OAuth request to the exact matching recovery-project Job `:run` endpoint | Create before the disposable project; retain through workload cleanup and independent audit. Scheduler identity has `roles/run.invoker` on its Job alone. Delete only in post-audit reclamation. | Persistent control-plane resource during a run; include Scheduler and Job charges in cost estimate. A bootstrap failure before the scheduler is verified requires operator recovery and must not create the disposable project. |
 | In-cluster GitOps resources — `gitops/platform` and `gitops/apps/report` | Namespace, quota, NetworkPolicy, Role/RoleBinding, Config Sync root, RepoSync and report ConfigMap belong to the per-run cluster; record repository revision and root IDs | Capture bounded sanitized evidence; remove RepoSync/root and Config Sync membership in reviewed order, then delete the cluster; independently confirm no workload survives cluster removal | Cluster runtime cost; evidence copies follow their separate retention policy |
 | GKE and Service Usage derived resources — Google-managed service agents, node VMs/disks, addresses, logs/metrics and artifacts | Associate with the run by exact parent project and GKE cluster/node-pool IDs. Record provider-returned IDs and documented derived resource classes when no stable child ID is returned | Stop producers, remove their owning GKE/Fleet/network resources in dependency order, then independently query Compute, GKE, GKE Hub, Service Usage and billing inventory. Any unexplained resource keeps the run `incomplete` | Include node disks, addresses, logs/metrics and retained artifacts in estimate and later billing reconciliation |
-| Terraform state — currently two local backends; candidate private remote state in recovery project | Dedicated bucket per run, exact state object, lineage/serial, generation and source root recorded in manifest; independent backup has its own recovery ID | State is not cleanup authority. Retain through empty-resource audit and billing review; verify export/restore before later destruction; delete only by state owner after evidence retention | State includes sensitive values; version and backup retention cost; never attach state to artifacts or ledger |
+| Terraform state — partial GCS backends declared for bootstrap and lab; backendless CI only | Dedicated bucket per run, exact state object, lineage/serial, generation and source root recorded in manifest; independent backup has its own recovery ID | State is not cleanup authority. Retain through empty-resource audit and billing review; verify export/restore before later destruction; delete only by state owner after evidence retention | No live init path, bucket setup, or separate-operator backup qualification yet; state includes sensitive values and must never attach to artifacts or ledger |
 
 ### Current Terraform and GitOps inventory mapped to the candidate
 
@@ -550,10 +550,12 @@ failed results; this remains an injected-adapter contract. New create intents
 are rejected at or after the fixed run deadline, while already-persisted intents
 remain reconcilable. Each provider target has at most three attempts; exhausted
 cleanup transitions to `incomplete` and preserves its recorded failure.
-The current Terraform roots use local backends at
+The Terraform roots now declare partial GCS backends, but credential-free CI
+initializes them with `-backend=false`; there is no qualified live init path.
+Earlier local-backend checks used
 `bootstrap/terraform/.terraform/ephemeral-bootstrap.tfstate` and
-`infrastructure/lab/.terraform/ephemeral-lab.tfstate`; those are not durable and
-are not backed up by GitHub Actions. The candidate replaces lab state with an
+`infrastructure/lab/.terraform/ephemeral-lab.tfstate`; those were not durable and
+were not backed up by GitHub Actions. The candidate uses lab state in an
 encrypted, uniform-access GCS state bucket dedicated to that run in the
 persistent recovery project. Control-plane state uses a different bucket and
 owner. Enable object versioning, retention and a separately administered
@@ -875,16 +877,17 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    review gate; a Terraform destroy path must apply `deletion_protection=false`
    to state first.
 4. `bootstrap/terraform/backend.tf`, `infrastructure/lab/backend.tf`, and the
-   controller init path: replace local state with the selected private GCS
-   backend, create the per-run state bucket before `terraform init`, grant only
-   the Terraform identity access to that bucket, and verify backup/restore.
-   The reaper never reads state. `scripts/gcp_state_backup_adapter.py` now has a
+   controller init path: partial GCS backends are declared and CI uses
+   `-backend=false`; still provision the selected private bucket before live
+   init, grant only the Terraform identity access to that bucket, and verify
+   backup/restore. The reaper never reads state. The config renderer emits only
+   the exact bucket, project and prefix; it does not initialize Terraform.
+   `scripts/gcp_state_backup_adapter.py` now has a
    fake-tested, generation-pinned copy and restore-to-new-object contract; it
    checks exact bucket/project ownership, UBLA, public access prevention,
    versioning and configured retention. It is not wired to a launcher or ledger,
    does not verify separate-operator IAM, and has no real backup or restore
-   receipt. Both Terraform roots still use local backends, so this packet remains
-   open.
+   receipt. This packet remains open.
 5. New recovery-controller modules plus `scripts/run_contract.py` adapters:
    connect the create-only ledger record and all per-run recovery controls before
    project creation; finish provider discovery, independent absence audit and
