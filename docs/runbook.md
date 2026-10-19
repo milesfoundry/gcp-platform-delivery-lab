@@ -4,10 +4,12 @@
 
 [GCP safety and recovery design](safety-recovery-design.md) defines the current
 CP-1 ownership matrix, run manifest, state transitions, cleanup order, failure
-cases and next implementation packet. The run contract validator in
-`scripts/run_contract.py` is a credential-free policy check only; it is not a
-deployed ledger, Cloud Run reaper, janitor, cleanup implementation or cloud
-qualification. No cloud resource creation is authorized by these files.
+cases and next implementation packet. The validator in
+`scripts/run_contract.py` and generation-CAS storage adapter in
+`scripts/run_ledger.py` are credential-free source components. The adapter has
+fake-store tests but no configured bucket, cloud identity, deployed ledger,
+Cloud Run reaper, janitor, cleanup implementation or cloud qualification. No
+cloud resource creation is authorized by these files.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources

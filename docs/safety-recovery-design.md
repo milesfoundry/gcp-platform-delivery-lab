@@ -369,6 +369,18 @@ Store one private JSON manifest per run in the GCS ledger bucket. Use Cloud
 Storage object generation preconditions for create/update compare-and-swap; a
 stale writer must receive a precondition failure, not overwrite a newer cleanup
 state ([request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions)).
+The credential-free `scripts/run_ledger.py` now implements an exact-path GCS
+adapter: create uses generation-match `0`, replacement uses the previously-read
+generation, and download is conditioned on the generation observed by reload.
+It never lists or deletes ledger objects. `scripts/test_run_ledger.py` exercises
+lost create responses, exact-run reconciliation, stale writers, provider-side
+races, invalid/corrupt manifests and the precondition arguments through a fake
+store. This is adapter-level evidence only; no GCS bucket, IAM binding, SDK
+credentials, object versioning, retention or private backup has been configured
+or exercised. The Cloud Storage Python client is version-pinned in
+[`scripts/requirements-recovery.txt`](../scripts/requirements-recovery.txt).
+Confirm its exact permissions and retry behavior with the isolated integration
+test before activation.
 The current Terraform roots use local backends at
 `bootstrap/terraform/.terraform/ephemeral-bootstrap.tfstate` and
 `infrastructure/lab/.terraform/ephemeral-lab.tfstate`; those are not durable and
@@ -483,7 +495,10 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    workload IDs. It still needs exact state-backup identifiers and restore-proof
    fields. Reject cross-project IDs, ambiguous create/link results and
    unauthorized project transitions. `scripts/run_contract_cli.py` emits only
-   exact-ID dry-run plans.
+   exact-ID dry-run plans. `scripts/run_ledger.py` implements create-only and
+   generation-conditional exact-path manifest storage with a fake-store suite;
+   event history, leases, heartbeats, state-backup metadata and restore proof
+   still need contract implementation.
 2. `bootstrap/terraform/`: now owns only persistent bootstrap-project APIs,
    GitHub federation, cost-alert scaffolding and lifecycle alert policies; it
    no longer owns run APIs, node identity or the Config Sync Feature. Still
@@ -500,11 +515,12 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    the Terraform identity access to that bucket, and verify backup/restore.
    The reaper never reads state.
 5. New recovery-controller modules plus `scripts/run_contract.py` adapters:
-   create the create-only ledger record and all per-run recovery controls before
-   project creation; implement generation-CAS writes and exact-ID discovery;
-   separate reaper, project/billing, audit and control-reclamation roles. Use a
-   fake provider for loss-after-create, stale-generation, retry and cross-run
-   denial cases before any hosted credentials are added.
+   connect the create-only ledger record and all per-run recovery controls before
+   project creation; finish event/lease metadata, exact-ID discovery and provider
+   reads/deletes; separate reaper, project/billing, audit and control-reclamation
+   roles. The ledger fake covers response-loss retries and CAS conflicts; extend
+   fake-provider drills for resource loss-after-create, idempotent cleanup and
+   cross-run denial before any hosted credentials are added.
 6. `.github/workflows/validate.yaml` remains credential-free for CI and runs
    schema, Terraform-render, cleanup, state, and negative-boundary checks. Add
    lifecycle workflow only after the reaper and cleanup path are deployed and
@@ -514,3 +530,7 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
 **CP-1B completion gate:** positive and negative tests, hosted credential-free
 validation, exact allowed files and plan, documented API/role matrix, fake
 runner-loss and idempotency drills, and a reviewed CP-1C live drill packet.
+
+The Python adapter uses documented `if_generation_match` conditions for GCS
+uploads and downloads. See [Google's Python client reference](https://docs.cloud.google.com/python/docs/reference/storage/latest/google.cloud.storage.blob.Blob)
+and [Cloud Storage request-precondition guide](https://docs.cloud.google.com/storage/docs/request-preconditions).
