@@ -14,7 +14,7 @@ import re
 from urllib.parse import quote, unquote
 
 
-SCHEMA = "portfolio.gcp-run.v3"
+SCHEMA = "portfolio.gcp-run.v4"
 MAX_RUN_LIFETIME = timedelta(minutes=60)
 MAX_OPERATION_ATTEMPTS = 3
 MAX_MANIFEST_RESOURCES = 512
@@ -24,6 +24,7 @@ RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,17}[a-z0-9])?$")
 PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_DIGEST = re.compile(r"^ghcr\.io/[a-z0-9-]+/[a-z0-9-]+@sha256:[0-9a-f]{64}$")
+REAPER_IMAGE_DIGEST = re.compile(r"^ghcr\.io/[a-z0-9-]+/gcp-reaper@sha256:[0-9a-f]{64}$")
 RESOURCE_URI = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:/._@+=,%~-]{0,4095}$")
 GENERATION = re.compile(r"^[1-9][0-9]*$")
 BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]$")
@@ -265,6 +266,7 @@ def validate_intent(
             "schema", "run_id", "scope", "created_at", "deadline_at", "source",
             "finance", "cleanup", "state", "resources", "controls",
             "independent_audit", "audit_receipts", "discovery_receipts",
+            "recovery_control_receipts",
             "terraform_state", "operations",
         },
         "intent",
@@ -431,7 +433,7 @@ def validate_intent(
     _only_keys(
         cleanup,
         {
-            "service_account", "identity_audience", "identity_verified",
+            "service_account", "image_digest", "identity_audience", "identity_verified",
             "independent_recovery_verified",
         },
         "cleanup",
@@ -445,6 +447,11 @@ def validate_intent(
         raise ContractError(
             "cleanup.service_account must belong to the recovery project"
         )
+    reaper_image_digest = _string(
+        cleanup.get("image_digest"), "cleanup.image_digest"
+    )
+    if not REAPER_IMAGE_DIGEST.fullmatch(reaper_image_digest):
+        raise ContractError("cleanup.image_digest must pin the gcp-reaper image by SHA-256")
     if cleanup.get("identity_verified") is not True:
         raise ContractError("cleanup.identity_verified must be true")
     identity_audience = _string(
@@ -485,6 +492,8 @@ def validate_intent(
             raise ContractError("new intent cannot contain independent audit results")
         if data.get("discovery_receipts", []) != []:
             raise ContractError("new intent cannot contain discovery receipts")
+        if data.get("recovery_control_receipts", []) != []:
+            raise ContractError("new intent cannot contain recovery-control verification receipts")
     return data
 
 
@@ -964,6 +973,50 @@ def validate_manifest(manifest: object) -> dict:
         control["status"] != "present" for control in controls
     ):
         raise ContractError("prepared state requires every recovery control verified present")
+    control_receipts = data.get("recovery_control_receipts", [])
+    if not isinstance(control_receipts, list) or len(control_receipts) > 8:
+        raise ContractError("recovery_control_receipts must contain at most eight entries")
+    previous_control_time = None
+    control_receipt_fields = {
+        "sequence", "run_id", "recovery_project_id", "verifier", "observed_at",
+        "manifest_generation", "observations_sha256", "receipt_id",
+    }
+    for index, receipt in enumerate(control_receipts, start=1):
+        receipt = _mapping(receipt, f"recovery_control_receipts[{index - 1}]")
+        _only_keys(receipt, control_receipt_fields, f"recovery_control_receipts[{index - 1}]")
+        if set(receipt) != control_receipt_fields:
+            raise ContractError("recovery-control receipt fields are incomplete")
+        if (
+            isinstance(receipt["sequence"], bool)
+            or not isinstance(receipt["sequence"], int)
+            or receipt["sequence"] != index
+            or receipt["run_id"] != data["run_id"]
+            or receipt["recovery_project_id"] != recovery_project_id
+            or receipt["verifier"] != "portfolio.gcp-recovery-controls.v1"
+        ):
+            raise ContractError("recovery-control receipt sequence, scope, or verifier is invalid")
+        observed_at = _timestamp(receipt["observed_at"], "recovery-control receipt observed_at")
+        if previous_control_time is not None and observed_at < previous_control_time:
+            raise ContractError("recovery-control receipt timestamps must be monotonic")
+        previous_control_time = observed_at
+        for field in ("observations_sha256", "receipt_id"):
+            if not isinstance(receipt[field], str) or not SHA256.fullmatch(receipt[field]):
+                raise ContractError(f"recovery-control receipt {field} must be a SHA-256 digest")
+        generation = receipt["manifest_generation"]
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+            raise ContractError("recovery-control receipt manifest_generation must be positive")
+        receipt_payload = {key: value for key, value in receipt.items() if key != "receipt_id"}
+        receipt_canonical = json.dumps(
+            receipt_payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        if hashlib.sha256(receipt_canonical.encode("utf-8")).hexdigest() != receipt["receipt_id"]:
+            raise ContractError("recovery-control receipt id does not match its contents")
+    if data["state"] == "prepared" and not control_receipts:
+        raise ContractError("prepared state requires a durable recovery-control verification receipt")
+    if any(item["status"] == "present" for item in controls) and not control_receipts:
+        raise ContractError("present recovery controls require a durable verification receipt")
+    if data["state"] not in {"control_bootstrapping", "incomplete"} and not control_receipts:
+        raise ContractError("post-bootstrap lifecycle states require a recovery-control verification receipt")
     if data["state"] in {
         "control_bootstrapping", "prepared", "project_create_requested",
         "project_created", "billing_link_requested", "project_linked",

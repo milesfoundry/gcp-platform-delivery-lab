@@ -11,7 +11,7 @@ from recovery_controller import ProviderReceipt, RecoveryController, request_fin
 from independent_auditor import register_discovered_workload_resources
 from test_independent_auditor import report as normalized_report
 from test_run_contract import RUN_ID
-from test_run_ledger import FakeObjectStore, current_intent
+from test_run_ledger import FakeObjectStore, current_intent, prepare_control_bootstrap
 
 
 class FakeOperationProvider:
@@ -97,8 +97,8 @@ class RecoveryControllerTests(unittest.TestCase):
             candidate = deepcopy(snapshot.manifest)
             candidate["state"] = state
             if state == "prepared":
-                for control in candidate["controls"]:
-                    control["status"] = "present"
+                snapshot = prepare_control_bootstrap(self.ledger, snapshot, self.now)
+                continue
             if state == "provisioning":
                 candidate["resources"] = [
                     {
@@ -114,7 +114,7 @@ class RecoveryControllerTests(unittest.TestCase):
                 expected_generation=snapshot.generation,
                 lease_owner="launcher",
                 manifest=candidate,
-                now=self.now + timedelta(seconds=index),
+                now=self.now + timedelta(seconds=index + 1),
             )
         self.resource_id = resource_id
 

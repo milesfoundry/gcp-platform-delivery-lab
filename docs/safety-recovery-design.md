@@ -829,9 +829,9 @@ CP-3. If they cannot, stop and get a concrete policy decision before activation.
 
 File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
 
-1. `scripts/run_contract.py` and its fixtures/tests: schema v3 separates
+1. `scripts/run_contract.py` and its fixtures/tests: schema v4 separates
    recovery/workload projects and reaper identities, binds the ledger bucket,
-   project parent and reaper identity audience, predeclares the per-run
+   reaper image digest, project parent and identity audience, predeclares the per-run
    controls, models project/billing phases and audits controls separately from
    workload IDs. The contract carries distinct state/backup bucket identifiers,
    generation references and append-only restore-proof fields. Reject
@@ -848,8 +848,16 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    adapter. Managed workload operations are bound to exact predeclared
    inventory entries, and terminal results atomically update resource status.
    Fake tests cover response loss, long-running polling and lease loss. Fake
-   create-response-loss takeover across a phase change is covered. Bucket
-   isolation, backup administration, versioning/retention, independent audit,
+   create-response-loss takeover across a phase change is covered.
+   The bootstrap gate requires an append-only verification receipt before a
+   control may become `present` or the run may enter `prepared`. The
+   read-only `scripts/gcp_recovery_control_verifier.py` checks the exact
+   Scheduler, ready digest-pinned Job, service accounts, job invoker policy,
+   ledger role and exact-object bucket condition; its CLI writes the resulting
+   response digests through a generation-conditional ledger transition.
+   Mocked source checks do not qualify live IAM inheritance, cross-run denial,
+   or GCP provider behavior.
+   Bucket isolation, backup administration, versioning/retention, independent audit,
    real provider reconciliation, adapters for the full resource matrix and
    actual restore remain unqualified.
 2. `bootstrap/terraform/`: now owns only persistent bootstrap-project APIs,

@@ -57,6 +57,7 @@ EVENT_TYPES = frozenset(
         "operation_progress_recorded",
         "operation_result_recorded",
         "inventory_discovered",
+        "recovery_controls_verified",
         "audit_receipt_recorded",
     }
 )
@@ -464,7 +465,7 @@ class RunLedger:
             raise
         if candidate["run_id"] != run_id:
             raise LedgerConflict("replacement cannot change the run ID")
-        for key in ("schema", "scope", "created_at", "deadline_at", "source"):
+        for key in ("schema", "scope", "created_at", "deadline_at", "source", "cleanup"):
             if candidate.get(key) != current.manifest.get(key):
                 raise LedgerConflict(f"replacement cannot change immutable field {key}")
         for role in ("backend", "backup"):
@@ -524,6 +525,28 @@ class RunLedger:
         if audit_delta and discovery_delta:
             raise LedgerConflict("audit and discovery receipts require separate ledger transitions")
 
+        old_control_receipts = current.manifest.get("recovery_control_receipts", [])
+        new_control_receipts = candidate.get("recovery_control_receipts", [])
+        if new_control_receipts[:len(old_control_receipts)] != old_control_receipts:
+            raise LedgerConflict("recovery-control verification receipt history is append-only")
+        control_receipt_delta = len(new_control_receipts) - len(old_control_receipts)
+        if control_receipt_delta not in {0, 1}:
+            raise LedgerConflict("one recovery-control receipt may be recorded per transition")
+        if control_receipt_delta == 1:
+            appended = new_control_receipts[-1]
+            if (
+                event_type != "recovery_controls_verified"
+                or lease_owner != "operator:control-bootstrap"
+                or current.manifest["state"] != "control_bootstrapping"
+                or candidate["state"] != "prepared"
+                or appended["manifest_generation"] != current.generation
+            ):
+                raise LedgerConflict("recovery-control receipt must bind the bootstrap verification transition")
+        elif event_type == "recovery_controls_verified":
+            raise LedgerConflict("control verification event requires one appended receipt")
+        if audit_delta and control_receipt_delta or discovery_delta and control_receipt_delta:
+            raise LedgerConflict("control verification, audit, and discovery receipts require separate transitions")
+
         old_resources = current.manifest["resources"]
         new_resources = candidate["resources"]
         if len(new_resources) < len(old_resources):
@@ -577,6 +600,16 @@ class RunLedger:
                 expected_status = permitted_status.get((old_item["type"], old_item["id"]))
                 if new_item["status"] != expected_status:
                     raise LedgerConflict("resource status changes require a terminal provider result")
+        old_controls = current.manifest["controls"]
+        new_controls = candidate["controls"]
+        if len(new_controls) != len(old_controls):
+            raise LedgerConflict("the predeclared recovery-control inventory is immutable")
+        for old_item, new_item in zip(old_controls, new_controls):
+            for field in ("type", "id", "ownership_proof", "delete_attempts"):
+                if old_item.get(field) != new_item.get(field):
+                    raise LedgerConflict(f"recovery control {field} is immutable")
+            if old_item["status"] == "expected" and new_item["status"] == "present" and control_receipt_delta != 1:
+                raise LedgerConflict("recovery-control status changes require a verified control receipt")
         if len(new_audits) == len(old_audits) and candidate.get(
             "independent_audit"
         ) != current.manifest.get("independent_audit"):
@@ -611,6 +644,103 @@ class RunLedger:
                 latest.manifest == candidate
                 and latest.metadata["lease"]["owner"] == lease_owner
                 and latest.metadata["events"][-1]["type"] == event_type
+            ):
+                return latest
+            raise
+
+    def record_recovery_control_verification(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        lease_owner: str,
+        observations: list[dict],
+        now: datetime | None = None,
+    ) -> LedgerSnapshot:
+        """Record exact read-only observations before preparing a run.
+
+        Each observation contains only a control type, exact resource ID, and
+        digest of the minimized provider response. Raw API bodies are never
+        written to the ledger.
+        """
+        self._validate_generation(expected_generation)
+        at = now or self._clock()
+        current = self.read(run_id)
+        if lease_owner != "operator:control-bootstrap":
+            raise LedgerConflict("recovery-control verification requires the bootstrap operator lease")
+        if not isinstance(observations, list):
+            raise ContractError("recovery-control observations must be a list")
+
+        expected = sorted(
+            ((item["type"], item["id"]) for item in current.manifest["controls"])
+        )
+        normalized = []
+        for item in observations:
+            if not isinstance(item, dict) or set(item) != {"type", "id", "response_sha256"}:
+                raise ContractError("each recovery-control observation must contain type, id, and response_sha256")
+            if (
+                not isinstance(item["type"], str)
+                or not isinstance(item["id"], str)
+                or not isinstance(item["response_sha256"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", item["response_sha256"]) is None
+            ):
+                raise ContractError("recovery-control observation identity or digest is malformed")
+            normalized.append({
+                "type": item["type"],
+                "id": item["id"],
+                "response_sha256": item["response_sha256"],
+            })
+        normalized.sort(key=lambda item: (item["type"], item["id"]))
+        if [(item["type"], item["id"]) for item in normalized] != expected:
+            raise LedgerConflict("verification observations must match every exact predeclared control")
+
+        observation_bytes = _canonical_json(normalized)
+        observations_sha256 = hashlib.sha256(observation_bytes).hexdigest()
+        if current.generation != expected_generation:
+            if any(
+                receipt["manifest_generation"] == expected_generation
+                and receipt["observations_sha256"] == observations_sha256
+                for receipt in current.manifest.get("recovery_control_receipts", [])
+            ):
+                return current
+            raise GenerationConflict("manifest generation is stale")
+        self._require_active_lease(current, lease_owner, at)
+        if current.manifest["state"] != "control_bootstrapping":
+            raise LedgerConflict("recovery controls can only be verified before run preparation")
+        if any(item["status"] != "expected" for item in current.manifest["controls"]):
+            raise LedgerConflict("recovery controls must be unverified before bootstrap verification")
+        receipt = {
+            "sequence": len(current.manifest.get("recovery_control_receipts", [])) + 1,
+            "run_id": run_id,
+            "recovery_project_id": current.manifest["scope"]["recovery_project_id"],
+            "verifier": "portfolio.gcp-recovery-controls.v1",
+            "observed_at": _format_time(at),
+            "manifest_generation": current.generation,
+            "observations_sha256": observations_sha256,
+        }
+        receipt["receipt_id"] = hashlib.sha256(_canonical_json(receipt)).hexdigest()
+        candidate = json.loads(json.dumps(current.manifest))
+        candidate["recovery_control_receipts"] = [
+            *candidate.get("recovery_control_receipts", []), receipt
+        ]
+        for item in candidate["controls"]:
+            item["status"] = "present"
+        candidate["state"] = "prepared"
+        try:
+            return self.replace(
+                run_id,
+                expected_generation=expected_generation,
+                lease_owner=lease_owner,
+                manifest=candidate,
+                event_type="recovery_controls_verified",
+                now=at,
+            )
+        except (ConnectionError, TimeoutError):
+            latest = self.read(run_id)
+            if any(
+                item["manifest_generation"] == expected_generation
+                and item["observations_sha256"] == observations_sha256
+                for item in latest.manifest.get("recovery_control_receipts", [])
             ):
                 return latest
             raise

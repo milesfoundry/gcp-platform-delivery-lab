@@ -15,8 +15,8 @@ from independent_auditor import (
 )
 from run_contract import cleanup_plan
 from run_ledger import RunLedger
-from test_run_contract import PROJECT, RUN_ID, intent, resource
-from test_run_ledger import FakeObjectStore, current_intent
+from test_run_contract import PROJECT, RUN_ID, attach_control_receipt, intent, resource
+from test_run_ledger import FakeObjectStore, current_intent, prepare_control_bootstrap
 
 
 def report(
@@ -27,6 +27,14 @@ def report(
     observed_at="2026-10-19T01:00:00Z",
 ):
     manifest = run or intent()
+    if (
+        manifest["state"] not in {"control_bootstrapping", "incomplete"}
+        and not manifest.get("recovery_control_receipts")
+    ):
+        for control in manifest["controls"]:
+            if control["status"] == "expected":
+                control["status"] = "present"
+        attach_control_receipt(manifest)
     if coverage is None:
         coverage = {
             surface: {
@@ -82,14 +90,14 @@ class IndependentAuditorTests(unittest.TestCase):
             candidate = deepcopy(snapshot.manifest)
             candidate["state"] = state
             if state == "prepared":
-                for control in candidate["controls"]:
-                    control["status"] = "present"
+                snapshot = prepare_control_bootstrap(ledger, snapshot, now)
+                continue
             snapshot = ledger.replace(
                 RUN_ID,
                 expected_generation=snapshot.generation,
                 lease_owner="launcher",
                 manifest=candidate,
-                now=now + timedelta(seconds=index),
+                now=now + timedelta(seconds=index + 1),
             )
         snapshot = ledger.release_lease(
             RUN_ID,
@@ -295,14 +303,14 @@ class IndependentAuditorTests(unittest.TestCase):
             candidate = deepcopy(snapshot.manifest)
             candidate["state"] = state
             if state == "prepared":
-                for control in candidate["controls"]:
-                    control["status"] = "present"
+                snapshot = prepare_control_bootstrap(ledger, snapshot, now)
+                continue
             snapshot = ledger.replace(
                 RUN_ID,
                 expected_generation=snapshot.generation,
                 lease_owner="launcher",
                 manifest=candidate,
-                now=now + timedelta(seconds=index),
+                now=now + timedelta(seconds=index + 1),
             )
         snapshot = ledger.release_lease(
             RUN_ID,

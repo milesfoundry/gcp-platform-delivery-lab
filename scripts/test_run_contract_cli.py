@@ -8,13 +8,14 @@ import tempfile
 import unittest
 
 from run_contract_cli import main
+from test_run_contract import attach_control_receipt
 
 
 def manifest():
     project = "sample-lab-123"
     run_id = "lab-20261018-a1b2"
-    return {
-        "schema": "portfolio.gcp-run.v3",
+    value = {
+        "schema": "portfolio.gcp-run.v4",
         "run_id": run_id,
         "scope": {
             "project_id": project,
@@ -58,6 +59,7 @@ def manifest():
         },
         "cleanup": {
             "service_account": f"{run_id}-reaper@recovery-lab-456.iam.gserviceaccount.com",
+            "image_digest": "ghcr.io/milesfoundry/gcp-reaper@sha256:" + "c" * 64,
             "identity_audience": "portfolio-reaper-v1",
             "identity_verified": True,
             "independent_recovery_verified": True,
@@ -78,10 +80,10 @@ def manifest():
         "operations": [],
         "state": "cleaning",
         "controls": [
-            {"type": "gcp.run.job", "id": f"projects/recovery-lab-456/locations/europe-west2/jobs/{run_id}-reaper", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
-            {"type": "gcp.scheduler.job", "id": f"projects/recovery-lab-456/locations/europe-west2/jobs/{run_id}-expiry", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
-            {"type": "gcp.iam.service_account", "id": f"projects/recovery-lab-456/serviceAccounts/{run_id}-reaper@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
-            {"type": "gcp.iam.service_account", "id": f"projects/recovery-lab-456/serviceAccounts/{run_id}-sched@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
+            {"type": "gcp.run.job", "id": f"projects/recovery-lab-456/locations/europe-west2/jobs/{run_id}-reaper", "ownership_proof": "run_name", "status": "present", "delete_attempts": 0},
+            {"type": "gcp.scheduler.job", "id": f"projects/recovery-lab-456/locations/europe-west2/jobs/{run_id}-expiry", "ownership_proof": "run_name", "status": "present", "delete_attempts": 0},
+            {"type": "gcp.iam.service_account", "id": f"projects/recovery-lab-456/serviceAccounts/{run_id}-reaper@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "present", "delete_attempts": 0},
+            {"type": "gcp.iam.service_account", "id": f"projects/recovery-lab-456/serviceAccounts/{run_id}-sched@recovery-lab-456.iam.gserviceaccount.com", "ownership_proof": "run_name", "status": "present", "delete_attempts": 0},
         ],
         "resources": [
             {
@@ -93,6 +95,8 @@ def manifest():
             }
         ],
     }
+    attach_control_receipt(value)
+    return value
 
 
 class RunContractCliTests(unittest.TestCase):

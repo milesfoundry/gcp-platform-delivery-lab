@@ -39,10 +39,25 @@ local state.
 3. Apply with
    `enable_project_retirement_iam = false`; this creates the Job and recurring
    trigger before the disposable project exists.
-4. Verify the Job, trigger, runtime identity, exact ledger IAM condition, and
-   exact Job invocation grant against the manifest. Do not continue to project
-   creation unless the trigger is active and the image runs the reviewed
-   entrypoint.
+4. Run `scripts/verify_gcp_recovery_controls.py` with the same intent,
+   explicitly named operator credential, expected Google principal, ledger
+   bucket, and recovery project. The read-only checks cover the enabled
+   Scheduler, ready pinned-image Job, both service accounts, exact Job
+   invoker binding, ledger custom role, exact-object bucket IAM condition,
+   bucket project/UBLA, and absence of the disposable run project. It appends
+   the generation-bound verification receipt and changes the manifest to
+   `prepared` only if every check passes. Do not request project creation
+   unless the command returns `state: prepared`.
+
+   ```sh
+   python3 scripts/verify_gcp_recovery_controls.py \
+     --intent /secure/path/run-intent.json \
+     --credentials-file /secure/path/operator.json \
+     --ledger-bucket LEDGER_BUCKET \
+     --ledger-project-id RECOVERY_PROJECT_ID \
+     --expected-email operator@example.com \
+     --expected-auditor-id google-user-USERINFO_SUBJECT
+   ```
 5. After the exact disposable project exists, review support for all three
    project-level custom-role permissions in the target organization. Only then
    apply `enable_project_retirement_iam = true` with the same remote state.

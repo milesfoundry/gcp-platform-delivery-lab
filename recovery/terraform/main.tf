@@ -70,9 +70,10 @@ resource "google_storage_bucket_iam_member" "ledger_reaper" {
     precondition {
       condition = (
         data.google_storage_bucket.ledger.project == var.recovery_project_id &&
-        data.google_storage_bucket.ledger.uniform_bucket_level_access
+        data.google_storage_bucket.ledger.uniform_bucket_level_access &&
+        data.google_storage_bucket.ledger.public_access_prevention == "enforced"
       )
-      error_message = "The ledger bucket must be in the recovery project with uniform bucket-level access enabled."
+      error_message = "The ledger bucket must be in the recovery project, enforce uniform bucket-level access, and enforce public access prevention."
     }
   }
 }

@@ -4,6 +4,7 @@ mock_provider "google" {
     defaults = {
       project                     = "recovery-lab-456"
       uniform_bucket_level_access = true
+      public_access_prevention    = "enforced"
     }
   }
 }
@@ -121,6 +122,22 @@ run "rejects_ledger_bucket_without_uniform_access" {
     values = {
       project                     = "recovery-lab-456"
       uniform_bucket_level_access = false
+      public_access_prevention    = "enforced"
+    }
+  }
+
+  expect_failures = [google_storage_bucket_iam_member.ledger_reaper]
+}
+
+run "rejects_ledger_bucket_without_public_access_prevention" {
+  command = plan
+
+  override_data {
+    target = data.google_storage_bucket.ledger
+    values = {
+      project                     = "recovery-lab-456"
+      uniform_bucket_level_access = true
+      public_access_prevention    = "inherited"
     }
   }
 

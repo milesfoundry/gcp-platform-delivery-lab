@@ -27,7 +27,7 @@ RUN_ID = "lab-20261018-a1b2"
 
 def intent():
     return {
-        "schema": "portfolio.gcp-run.v3",
+        "schema": "portfolio.gcp-run.v4",
         "run_id": RUN_ID,
         "scope": {
             "project_id": PROJECT,
@@ -75,6 +75,7 @@ def intent():
         },
         "cleanup": {
             "service_account": "lab-20261018-a1b2-reaper@recovery-lab-456.iam.gserviceaccount.com",
+            "image_digest": "ghcr.io/milesfoundry/gcp-reaper@sha256:" + "c" * 64,
             "identity_audience": "portfolio-reaper-v1",
             "identity_verified": True,
             "independent_recovery_verified": True,
@@ -95,6 +96,7 @@ def intent():
         "operations": [],
         "state": "control_bootstrapping",
         "resources": [],
+        "recovery_control_receipts": [],
         "controls": [
             {"type": "gcp.run.job", "id": "projects/recovery-lab-456/locations/europe-west2/jobs/lab-20261018-a1b2-reaper", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
             {"type": "gcp.scheduler.job", "id": "projects/recovery-lab-456/locations/europe-west2/jobs/lab-20261018-a1b2-expiry", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},
@@ -112,6 +114,29 @@ def resource(resource_type, name, *, proof="run_name", status="present"):
         "status": status,
         "delete_attempts": 0,
     }
+
+
+def attach_control_receipt(candidate, *, generation=1):
+    observations = [
+        {"type": item["type"], "id": item["id"], "response_sha256": "d" * 64}
+        for item in candidate["controls"]
+    ]
+    observations.sort(key=lambda item: (item["type"], item["id"]))
+    receipt = {
+        "sequence": 1,
+        "run_id": candidate["run_id"],
+        "recovery_project_id": candidate["scope"]["recovery_project_id"],
+        "verifier": "portfolio.gcp-recovery-controls.v1",
+        "observed_at": "2026-10-18T12:00:00Z",
+        "manifest_generation": generation,
+        "observations_sha256": hashlib.sha256(
+            json.dumps(observations, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+    receipt["receipt_id"] = hashlib.sha256(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    candidate.setdefault("recovery_control_receipts", []).append(receipt)
 
 
 def audit_receipt(sequence, phase, *, checks=None, result="passed", complete=True):
@@ -245,10 +270,10 @@ class RunIntentTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
 
-    def test_schema_three_binds_recovery_bucket_project_parent_and_audience(self):
+    def test_schema_four_binds_recovery_bucket_project_parent_and_audience(self):
         candidate = intent()
         self.assertEqual(
-            validate_intent(candidate, now=NOW)["schema"], "portfolio.gcp-run.v3"
+            validate_intent(candidate, now=NOW)["schema"], "portfolio.gcp-run.v4"
         )
         for field, value in (
             ("ledger_bucket_name", "../ledger"),
@@ -263,6 +288,10 @@ class RunIntentTests(unittest.TestCase):
             changed["cleanup"]["identity_audience"] = value
             with self.subTest(audience=value), self.assertRaises(ContractError):
                 validate_intent(changed, now=NOW)
+        changed = intent()
+        changed["cleanup"]["image_digest"] = "ghcr.io/milesfoundry/gcp-reaper:latest"
+        with self.assertRaises(ContractError):
+            validate_intent(changed, now=NOW)
         old_schema = intent()
         old_schema["schema"] = "portfolio.gcp-run.v2"
         with self.assertRaises(ContractError):
@@ -367,6 +396,7 @@ class RunIntentTests(unittest.TestCase):
         ]
         for control in candidate["controls"]:
             control["status"] = "present"
+        attach_control_receipt(candidate)
         request_sha = "c" * 64
         phase = "provisioning"
         op_id = operation_id(
@@ -462,6 +492,7 @@ class RunIntentTests(unittest.TestCase):
         ]
         for control in candidate["controls"]:
             control["status"] = "present"
+        attach_control_receipt(candidate)
         event = {
             "sequence": 1,
             "kind": "intent",
@@ -577,6 +608,9 @@ class ManifestTests(unittest.TestCase):
     def manifest(self):
         candidate = intent()
         candidate["state"] = "cleaning"
+        for control in candidate["controls"]:
+            control["status"] = "present"
+        attach_control_receipt(candidate)
         candidate["resources"] = [
             resource("gcp.compute.network", RUN_ID + "-network"),
             resource("gcp.gke.cluster", RUN_ID + "-cluster"),
@@ -622,13 +656,14 @@ class ManifestTests(unittest.TestCase):
             validate_intent(candidate, now=NOW)
 
     def test_prepared_requires_all_recovery_controls_verified(self):
-        candidate = self.manifest()
+        candidate = intent()
         candidate["state"] = "prepared"
         candidate["resources"] = []
         with self.assertRaises(ContractError):
             validate_manifest(candidate)
         for control in candidate["controls"]:
             control["status"] = "present"
+        attach_control_receipt(candidate)
         self.assertEqual(validate_manifest(candidate)["state"], "prepared")
 
     def test_unknown_persistent_or_project_wide_resource_is_rejected(self):
@@ -873,6 +908,7 @@ class ManifestTests(unittest.TestCase):
     def test_project_delete_must_follow_billing_unlink_result(self):
         candidate = intent()
         candidate["state"] = "project_retiring"
+        attach_control_receipt(candidate)
         receipt = audit_receipt(1, "workload")
         candidate["audit_receipts"] = [receipt]
         candidate["independent_audit"] = _audit_summary(receipt)
@@ -888,6 +924,7 @@ class ManifestTests(unittest.TestCase):
     def test_project_retirement_operations_keep_the_same_verified_principal(self):
         candidate = intent()
         candidate["state"] = "project_retiring"
+        attach_control_receipt(candidate)
         receipt = audit_receipt(1, "workload")
         candidate["audit_receipts"] = [receipt]
         candidate["independent_audit"] = _audit_summary(receipt)

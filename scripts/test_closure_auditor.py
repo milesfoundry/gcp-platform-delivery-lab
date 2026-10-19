@@ -11,13 +11,16 @@ from closure_auditor import (
 )
 from independent_auditor import manifest_fingerprint
 from run_contract import _audit_summary
-from test_run_contract import audit_receipt, intent, retirement_operations
+from test_run_contract import attach_control_receipt, audit_receipt, intent, retirement_operations
 
 
 def closure_ready_manifest():
     manifest = intent()
     manifest["state"] = "controls_reclaiming"
     manifest["operations"] = retirement_operations()
+    for control in manifest["controls"]:
+        control["status"] = "present"
+    attach_control_receipt(manifest)
     for control in manifest["controls"]:
         control["status"] = "deleted"
     receipt = audit_receipt(1, "workload")

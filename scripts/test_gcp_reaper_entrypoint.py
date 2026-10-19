@@ -16,7 +16,7 @@ from gcp_reaper_entrypoint import (
     parse_job_config,
 )
 from run_contract import _audit_summary
-from test_run_contract import intent
+from test_run_contract import attach_control_receipt, intent
 
 
 NOW = datetime(2026, 10, 19, 12, 0, tzinfo=timezone.utc)
@@ -48,6 +48,7 @@ def retirement_manifest():
         {**control, "status": "present"}
         for control in manifest["controls"]
     ]
+    attach_control_receipt(manifest)
     receipt = {
         "sequence": 1,
         "run_id": RUN_ID,

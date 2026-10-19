@@ -115,6 +115,41 @@ class FakeObjectStore:
         return new_generation
 
 
+def prepare_control_bootstrap(ledger, snapshot, now):
+    """Exercise the named read-only verification receipt path in ledger fixtures."""
+    owner = snapshot.metadata["lease"]["owner"]
+    released = ledger.release_lease(
+        RUN_ID, expected_generation=snapshot.generation, owner=owner, now=now,
+    )
+    bootstrap = ledger.acquire_lease(
+        RUN_ID, expected_generation=released.generation,
+        owner="operator:control-bootstrap", now=now + timedelta(milliseconds=100),
+    )
+    observations = []
+    for control in bootstrap.manifest["controls"]:
+        raw = json.dumps(
+            {"type": control["type"], "id": control["id"]},
+            sort_keys=True, separators=(",", ":"),
+        ).encode()
+        observations.append({
+            "type": control["type"], "id": control["id"],
+            "response_sha256": hashlib.sha256(raw).hexdigest(),
+        })
+    prepared = ledger.record_recovery_control_verification(
+        RUN_ID, expected_generation=bootstrap.generation,
+        lease_owner="operator:control-bootstrap", observations=observations,
+        now=now + timedelta(milliseconds=200),
+    )
+    relinquished = ledger.release_lease(
+        RUN_ID, expected_generation=prepared.generation,
+        owner="operator:control-bootstrap", now=now + timedelta(milliseconds=300),
+    )
+    return ledger.acquire_lease(
+        RUN_ID, expected_generation=relinquished.generation,
+        owner=owner, now=now + timedelta(milliseconds=400),
+    )
+
+
 class FakeProvider:
     """Exact-ID fake provider that can lose a committed create response."""
 
@@ -151,6 +186,44 @@ class RunLedgerTests(unittest.TestCase):
             now=self.now,
         )
 
+    def mark_controls_present(self, snapshot):
+        owner = snapshot.metadata["lease"]["owner"]
+        at = self.now
+        released = self.ledger.release_lease(
+            RUN_ID, expected_generation=snapshot.generation,
+            owner=owner, now=at,
+        )
+        bootstrap = self.ledger.acquire_lease(
+            RUN_ID, expected_generation=released.generation,
+            owner="operator:control-bootstrap", now=at + timedelta(milliseconds=100),
+        )
+        observations = []
+        for control in bootstrap.manifest["controls"]:
+            raw = json.dumps(
+                {"type": control["type"], "id": control["id"]},
+                sort_keys=True, separators=(",", ":"),
+            ).encode()
+            observations.append({
+                "type": control["type"], "id": control["id"],
+                "response_sha256": hashlib.sha256(raw).hexdigest(),
+            })
+        prepared = self.ledger.record_recovery_control_verification(
+            RUN_ID, expected_generation=bootstrap.generation,
+            lease_owner="operator:control-bootstrap", observations=observations,
+            now=at + timedelta(milliseconds=200),
+        )
+        if owner == "operator:control-bootstrap":
+            return prepared
+        relinquished = self.ledger.release_lease(
+            RUN_ID, expected_generation=prepared.generation,
+            owner="operator:control-bootstrap", now=at + timedelta(milliseconds=300),
+        )
+        acquired = self.ledger.acquire_lease(
+            RUN_ID, expected_generation=relinquished.generation,
+            owner=owner, now=at + timedelta(milliseconds=400),
+        )
+        return acquired
+
     def lease_in_provisioning(self):
         snapshot = self.create_and_lease()
         states = [
@@ -162,8 +235,8 @@ class RunLedgerTests(unittest.TestCase):
             candidate = deepcopy(snapshot.manifest)
             candidate["state"] = state
             if state == "prepared":
-                for control in candidate["controls"]:
-                    control["status"] = "present"
+                snapshot = self.mark_controls_present(snapshot)
+                continue
             if state == "provisioning":
                 candidate["resources"] = [
                     {
@@ -182,7 +255,7 @@ class RunLedgerTests(unittest.TestCase):
                 expected_generation=snapshot.generation,
                 lease_owner="launcher",
                 manifest=candidate,
-                now=self.now + timedelta(seconds=index),
+                now=self.now + timedelta(seconds=index + 1),
             )
         return snapshot
 
@@ -280,7 +353,7 @@ class RunLedgerTests(unittest.TestCase):
         self.ledger.create(self.intent)
         changed = deepcopy(self.intent)
         changed["source"]["revision"] = "c" * 40
-        with self.assertRaises(LedgerConflict):
+        with self.assertRaises((LedgerConflict, ContractError)):
             self.ledger.create(changed)
 
     def test_missing_exact_manifest_fails_without_listing(self):
@@ -294,24 +367,16 @@ class RunLedgerTests(unittest.TestCase):
         candidate["state"] = "prepared"
         for control in candidate["controls"]:
             control["status"] = "present"
-        updated = self.ledger.replace(
-            RUN_ID,
-            expected_generation=original.generation,
-            lease_owner="launcher",
-            manifest=candidate,
-        )
+        with self.assertRaises((LedgerConflict, ContractError)):
+            self.ledger.replace(
+                RUN_ID, expected_generation=original.generation,
+                lease_owner="launcher", manifest=candidate,
+            )
+        updated = self.mark_controls_present(original)
         self.assertGreater(updated.generation, original.generation)
         self.assertEqual(updated.manifest["state"], "prepared")
-        self.assertEqual(
-            self.ledger.replace(
-                RUN_ID,
-                expected_generation=original.generation,
-                lease_owner="launcher",
-                manifest=candidate,
-            ),
-            updated,
-        )
-        changed = deepcopy(candidate)
+        self.assertEqual(len(updated.manifest["recovery_control_receipts"]), 1)
+        changed = deepcopy(updated.manifest)
         changed["finance"]["monthly_alert_threshold_gbp"] = 71
         with self.assertRaises(GenerationConflict):
             self.ledger.replace(
@@ -674,35 +739,54 @@ class RunLedgerTests(unittest.TestCase):
         self.assertEqual(provider.create_calls, 1)
         self.assertEqual(provider.lookups, [resource_id])
 
-    def test_retry_after_committed_replace_response_loss_reconciles_exact_generation(self):
+    def test_controls_cannot_be_marked_present_without_verifier_receipt(self):
         original = self.create_and_lease()
         candidate = deepcopy(original.manifest)
         candidate["state"] = "prepared"
         for control in candidate["controls"]:
             control["status"] = "present"
-        self.store.fail_after_replace = True
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises((LedgerConflict, ContractError)):
             self.ledger.replace(
-                RUN_ID,
-                expected_generation=original.generation,
-                lease_owner="launcher",
-                manifest=candidate,
+                RUN_ID, expected_generation=original.generation,
+                lease_owner="launcher", manifest=candidate,
             )
-        reconciled = self.ledger.replace(
-            RUN_ID,
-            expected_generation=original.generation,
-            lease_owner="launcher",
-            manifest=candidate,
+        self.assertEqual(self.ledger.read(RUN_ID).manifest["state"], "control_bootstrapping")
+
+    def test_control_verification_reconciles_a_lost_commit_response(self):
+        original = self.create_and_lease()
+        released = self.ledger.release_lease(
+            RUN_ID, expected_generation=original.generation,
+            owner="launcher", now=self.now,
         )
+        bootstrap = self.ledger.acquire_lease(
+            RUN_ID, expected_generation=released.generation,
+            owner="operator:control-bootstrap", now=self.now + timedelta(milliseconds=100),
+        )
+        observations = []
+        for control in bootstrap.manifest["controls"]:
+            observations.append({
+                "type": control["type"], "id": control["id"],
+                "response_sha256": "a" * 64,
+            })
+        self.store.fail_after_replace = True
+        committed = self.ledger.record_recovery_control_verification(
+            RUN_ID, expected_generation=bootstrap.generation,
+            lease_owner="operator:control-bootstrap", observations=observations,
+            now=self.now + timedelta(milliseconds=200),
+        )
+        reconciled = self.ledger.record_recovery_control_verification(
+            RUN_ID, expected_generation=bootstrap.generation,
+            lease_owner="operator:control-bootstrap", observations=observations,
+            now=self.now + timedelta(milliseconds=200),
+        )
+        self.assertEqual(committed, reconciled)
         self.assertEqual(reconciled.manifest["state"], "prepared")
-        self.assertGreater(reconciled.generation, original.generation)
+        self.assertEqual(len(reconciled.manifest["recovery_control_receipts"]), 1)
 
     def test_provider_side_race_is_rejected_by_storage_precondition(self):
         original = self.create_and_lease()
         candidate = deepcopy(original.manifest)
-        candidate["state"] = "prepared"
-        for control in candidate["controls"]:
-            control["status"] = "present"
+        candidate["state"] = "incomplete"
 
         def concurrent_writer(store, name):
             _, old_generation = store.objects[name]
@@ -735,7 +819,7 @@ class RunLedgerTests(unittest.TestCase):
 
         skipped = deepcopy(original.manifest)
         skipped["state"] = "ready"
-        with self.assertRaises(LedgerConflict):
+        with self.assertRaises((LedgerConflict, ContractError)):
             self.ledger.replace(
                 RUN_ID,
                 expected_generation=original.generation,
@@ -751,6 +835,18 @@ class RunLedgerTests(unittest.TestCase):
                 expected_generation=original.generation,
                 lease_owner="launcher",
                 manifest=moved_backend,
+            )
+
+        moved_reaper_image = deepcopy(original.manifest)
+        moved_reaper_image["cleanup"]["image_digest"] = (
+            "ghcr.io/milesfoundry/gcp-reaper@sha256:" + "d" * 64
+        )
+        with self.assertRaises(LedgerConflict):
+            self.ledger.replace(
+                RUN_ID,
+                expected_generation=original.generation,
+                lease_owner="launcher",
+                manifest=moved_reaper_image,
             )
 
     def test_restore_proof_history_is_append_only(self):
@@ -1322,9 +1418,7 @@ class RunLedgerTests(unittest.TestCase):
                 now=expired_at,
             )
         candidate = deepcopy(leased.manifest)
-        candidate["state"] = "prepared"
-        for control in candidate["controls"]:
-            control["status"] = "present"
+        candidate["state"] = "incomplete"
         with self.assertRaises(LedgerConflict):
             self.ledger.replace(
                 RUN_ID,

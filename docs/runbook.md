@@ -204,6 +204,12 @@ reusing a run ID with changed intent fails. It does not apply Terraform or
 create recovery controls. See the [recovery Terraform ordering](../recovery/terraform/README.md)
 for the required sequence. No ledger bucket or operator credential is currently
 configured in this repository, so this source path has not been run against GCP.
+After applying the per-run recovery root with retirement IAM disabled,
+`scripts/verify_gcp_recovery_controls.py` performs read-only exact-resource
+checks and records one generation-bound receipt. It can move the manifest to
+`prepared` only when the active Scheduler, ready digest-pinned Job, identities,
+least-scope invocation and ledger IAM controls match and the run project is
+still absent. Project creation must not start before that receipt exists.
 
 ## Before any cloud apply
 
@@ -216,8 +222,9 @@ because validate passes. Required outstanding gates:
    reference and 60-minute expiry. Record gross usage, net cash and projected
    credit runway. Reconcile the existing project-filtered budget, then configure
    and test each run project's cost-alert route before provisioning. The
-   schema-v3 run manifest must bind the recovery ledger bucket and exact project
-   parent, and include a sorted `scope.enabled_api_services` list matching
+   schema-v4 run manifest must bind the recovery ledger bucket, reaper image
+   digest and exact project parent, and include a sorted
+   `scope.enabled_api_services` list matching
    `infrastructure/lab`'s declared API set. It also binds the reaper identity
    audience used by the Cloud Run Job. The independent pre-deletion
    Service Usage snapshot must match it exactly.
@@ -229,9 +236,9 @@ because validate passes. Required outstanding gates:
    artifact/cache or commit it. Never commit plans, service-account keys or
    environment credentials.
 3. Qualify the selected GKE/Config Sync versions and fleet RBAC behavior.
-4. Qualify the exact janitor IAM boundary. Schema v2 and the dry-run planner
-   separate recovery controls and workload inventory, but do not call Google
-   APIs or prove cross-run IAM denial. No reaper may be enabled until project
+4. Qualify the exact janitor IAM boundary. Schema v4, the read-only recovery
+   control verifier and dry-run planner separate recovery controls and workload
+   inventory; source mocks do not prove cross-run IAM denial. No reaper may be enabled until project
    creation, lowest-grant scopes, provider calls and negative cross-run tests pass.
 5. Configure and qualify the generation-conditional GCS ledger, wire the
    deletion-only adapter into the controller, and deploy the out-of-band reaper.
