@@ -13,7 +13,7 @@ import json
 import re
 from typing import Protocol
 
-from run_contract import ContractError
+from run_contract import DELETE_ORDER, ContractError
 from run_ledger import LedgerSnapshot, RunLedger
 
 
@@ -106,6 +106,15 @@ class RecoveryController:
         """
         request_sha256 = request_fingerprint(request)
         before = self.ledger.read(run_id)
+        if resource_type in DELETE_ORDER:
+            declared = any(
+                item["type"] == resource_type and item["id"] == resource_id
+                for item in before.manifest["resources"]
+            )
+            if not declared:
+                raise ContractError(
+                    "provider operation target must be predeclared in the exact run inventory"
+                )
         existing_intent = next(
             (
                 event

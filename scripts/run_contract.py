@@ -833,6 +833,15 @@ def validate_manifest(manifest: object) -> dict:
         if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
             raise ContractError("delete_attempts must be a non-negative integer")
 
+    declared_resources = {(item["type"], item["id"]) for item in resources}
+    for event in data["operations"]:
+        if event["kind"] == "intent" and event["resource_type"] in DELETE_ORDER:
+            target = (event["resource_type"], event["resource_id"])
+            if target not in declared_resources:
+                raise ContractError(
+                    "provider operation target must be predeclared in the exact run inventory"
+                )
+
     audit = None
     if "independent_audit" in data:
         audit = _mapping(data["independent_audit"], "independent_audit")

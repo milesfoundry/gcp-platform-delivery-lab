@@ -15,6 +15,7 @@ from typing import Protocol
 
 from run_contract import (
     ContractError,
+    DELETE_ORDER,
     MAX_RUN_LIFETIME,
     RUN_ID,
     next_state,
@@ -704,6 +705,31 @@ class RunLedger:
             raise GenerationConflict("manifest generation is stale")
 
         candidate = json.loads(json.dumps(current.manifest))
+        intent = next(
+            event
+            for event in candidate["operations"]
+            if event["kind"] == "intent"
+            and event["operation_id"] == operation_id_value
+        )
+        if intent["resource_type"] in DELETE_ORDER:
+            resource = next(
+                (
+                    item for item in candidate["resources"]
+                    if item["type"] == intent["resource_type"]
+                    and item["id"] == intent["resource_id"]
+                ),
+                None,
+            )
+            if resource is None:
+                raise LedgerConflict("provider operation target is not declared in run inventory")
+            if intent["action"] == "create" and outcome in {
+                "succeeded", "reconciled_present"
+            }:
+                resource["status"] = "present"
+            elif intent["action"] == "delete" and outcome in {
+                "succeeded", "reconciled_absent"
+            }:
+                resource["status"] = "deleted"
         result["sequence"] = len(candidate["operations"]) + 1
         candidate["operations"].append(result)
         return self.replace(

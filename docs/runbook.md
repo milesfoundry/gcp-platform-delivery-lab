@@ -20,6 +20,14 @@ complete; only a terminal result resolves an intent. The credential-free
 an injected provider adapter. It has no GCP adapter and cannot create resources
 itself. No cloud resource creation is authorized by these files.
 
+Workload provider operations must target an exact `(type, id)` already declared
+in the run manifest inventory. A terminal successful create or delete result and
+the corresponding `expected/present/deleted` inventory status are written in
+one generation-CAS replacement. Failed or unresolved operations leave inventory
+status unchanged. This binds the credential-free operation journal to the
+predeclared cleanup inventory; ordered deletion, independent discovery/audit,
+and a real provider adapter remain unimplemented.
+
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources
 without gaining broader project-level access. The working design candidate is
