@@ -421,6 +421,14 @@ in-flight request or prove real provider discovery semantics.
 expiry and generation for the caller immediately before it sends a provider
 request. This narrows the race window; an API request already sent cannot be
 cancelled or fenced by the ledger.
+`scripts/recovery_controller.py` now coordinates that ledger contract with an
+injected adapter: it persists and submits a new intent once, polls a journaled
+long-running operation on retry, or inspects the exact resource ID after an
+ambiguous submission. It never resubmits an existing intent. A create that is
+still absent remains unresolved because absence alone cannot prove the original
+request will not complete. Fake-adapter tests cover accepted asynchronous
+operations, commit-then-lost responses, unresolved absence and lease loss before
+submission. The controller has no real GCP adapter and does not execute cleanup.
 The current Terraform roots use local backends at
 `bootstrap/terraform/.terraform/ephemeral-bootstrap.tfstate` and
 `infrastructure/lab/.terraform/ephemeral-lab.tfstate`; those are not durable and
@@ -560,10 +568,13 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    and CAS leases with a fake-store suite. The manifest now records exact
    backend/backup paths, append-only current/previous restore proof metadata,
    and durable phase-bound provider intents with deterministic IDs, progress
-   receipts for accepted long-running operations, and terminal results. Fake
-   create-response-loss takeover across a phase change is covered. Bucket isolation, backup
-   administration, versioning/retention, real provider reconciliation, adapters
-   for the full resource matrix and actual restore remain unqualified.
+   receipts for accepted long-running operations, and terminal results. The
+   credential-free `scripts/recovery_controller.py` submits or reconciles a
+   single operation through an injected adapter and fake tests cover response
+   loss, long-running polling and lease loss. Fake create-response-loss takeover
+   across a phase change is covered. Bucket isolation, backup administration,
+   versioning/retention, real provider reconciliation, adapters for the full
+   resource matrix and actual restore remain unqualified.
 2. `bootstrap/terraform/`: now owns only persistent bootstrap-project APIs,
    GitHub federation, cost-alert scaffolding and lifecycle alert policies; it
    no longer owns run APIs, node identity or the Config Sync Feature. Still
