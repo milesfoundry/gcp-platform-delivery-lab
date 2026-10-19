@@ -134,9 +134,12 @@ class RecoveryController:
         )
         authorize_actor = getattr(self.provider, "authorize_actor", None)
         actor_id = None
-        if callable(authorize_actor) and action == "delete":
+        if callable(authorize_actor):
             actor = authorize_actor(lease_owner, action, resource_type)
-            actor_id = getattr(actor, "auditor_id", actor if isinstance(actor, str) else None)
+            if action == "delete":
+                actor_id = getattr(
+                    actor, "auditor_id", actor if isinstance(actor, str) else None
+                )
         if (
             before.manifest["state"] == "project_retiring"
             and action == "delete"

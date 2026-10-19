@@ -122,7 +122,20 @@ class GCPProjectLifecycleAdapter:
         return f"projects/{self._project_id}"
 
     def authorize_actor(self, lease_owner, action, resource_type) -> VerifiedGoogleUser | None:
-        """Bind retirement lease use to its configured, verified principal."""
+        """Bind lifecycle mutations to their configured lease and principal."""
+        if resource_type not in {PROJECT_TYPE, BILLING_TYPE, SERVICE_TYPE}:
+            return None
+        if action == "create":
+            if lease_owner != "launcher":
+                raise ProjectLifecycleError(
+                    "project creation, billing, and API enablement require the launcher lease"
+                )
+            principal = self._verify_project_reclaimer(self._access_token())
+            if not principal.auditor_id.startswith("google-user-"):
+                raise ProjectLifecycleError(
+                    "project lifecycle creation requires a verified Google user"
+                )
+            return None
         if action != "delete" or resource_type not in {PROJECT_TYPE, BILLING_TYPE}:
             return None
         if (
@@ -550,8 +563,11 @@ class GCPProjectLifecycleAdapter:
         ):
             raise ProjectLifecycleError("provider request target failed URL validation")
         token = self._access_token()
-        if require_project_reclaimer:
-            self._verify_project_reclaimer(token)
+        # Every request, including project creation and read-only inspection,
+        # must use the explicitly configured principal. Re-check the token
+        # actually sent because the credential source may refresh between the
+        # controller's lease check and this provider call.
+        self._verify_project_reclaimer(token)
         try:
             response = self._transport.request(
                 method,

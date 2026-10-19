@@ -410,6 +410,33 @@ class GCPProjectLifecycleAdapterTests(unittest.TestCase):
         self.assertEqual(transport.calls, [])
         self.assertEqual(len(identity.calls), 1)
 
+    def test_project_creation_refuses_a_different_verified_google_principal(self):
+        identity = FakeIdentityTransport(email="someone-else@example.com")
+        transport = FakeTransport([])
+        provider = adapter(transport, identity_transport=identity)
+        with self.assertRaisesRegex(
+            ProjectLifecycleError, "Google principal could not be verified"
+        ):
+            provider.submit(
+                "create", PROJECT_TYPE, f"projects/{PROJECT}", {
+                    "project_id": PROJECT,
+                    "display_name": RUN,
+                    "parent": PARENT,
+                    "labels": {"lab_run_id": RUN},
+                },
+            )
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(len(identity.calls), 1)
+
+    def test_project_creation_authorization_requires_launcher_lease(self):
+        identity = FakeIdentityTransport()
+        provider = adapter(FakeTransport([]), identity_transport=identity)
+        with self.assertRaisesRegex(ProjectLifecycleError, "require the launcher lease"):
+            provider.authorize_actor("operator:control-bootstrap", "create", PROJECT_TYPE)
+        self.assertEqual(identity.calls, [])
+        self.assertIsNone(provider.authorize_actor("launcher", "create", PROJECT_TYPE))
+        self.assertEqual(len(identity.calls), 1)
+
     def test_named_project_reclaimer_lease_returns_verified_google_subject(self):
         identity = FakeIdentityTransport()
         provider = adapter(FakeTransport([]), identity_transport=identity)
