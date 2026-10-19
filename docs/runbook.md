@@ -43,6 +43,11 @@ storage request. The `project_reclaimer_runtime.py` factory passes the same
 token source and identity transport to both adapters and the controller. The
 credential-source launcher and deployed runtime remain unqualified; this path
 is fake-tested only.
+`ExplicitGoogleCredentialTokenSource` is an optional adapter for a Google auth
+credential explicitly injected by a trusted caller. That caller must configure
+the required Google API scopes plus `openid` and `email` for UserInfo checks.
+The adapter refreshes the injected credential but does not discover credentials,
+select a workload identity, or qualify a deployment.
 `gcp_cleanup_adapter.py` now implements a deletion-only adapter for exact
 Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GCS objects,
 GKE node-pool/cluster, and GKE Fleet membership/feature resources. It requires an

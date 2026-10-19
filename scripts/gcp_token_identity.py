@@ -43,6 +43,45 @@ class AccessTokenSource(Protocol):
     def access_token(self) -> str: ...
 
 
+class ExplicitGoogleCredentialTokenSource:
+    """Refresh and expose an explicitly supplied Google auth credential.
+
+    The credential and its refresh transport must be constructed by a trusted
+    caller. This wrapper performs no ADC lookup, file discovery, or login.
+    Principal checks remain the responsibility of
+    ``verify_access_token_principal`` at the API request boundary.
+    """
+
+    def __init__(self, credentials, refresh_request):
+        if credentials is None or refresh_request is None:
+            raise IdentityVerificationError(
+                "explicit Google credentials and refresh request are required"
+            )
+        self._credentials = credentials
+        self._refresh_request = refresh_request
+
+    def access_token(self) -> str:
+        try:
+            if not self._credentials.valid:
+                self._credentials.refresh(self._refresh_request)
+            token = self._credentials.token
+        except Exception:
+            raise IdentityVerificationError(
+                "explicit Google credentials could not provide an access token"
+            ) from None
+        if (
+            not isinstance(token, str)
+            or not token
+            or token.strip() != token
+            or "\n" in token
+            or "\r" in token
+        ):
+            raise IdentityVerificationError(
+                "explicit Google credentials returned an invalid access token"
+            )
+        return token
+
+
 USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 PRINCIPAL_EMAIL = re.compile(
     r"^[a-z0-9][a-z0-9._+-]{0,63}@[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"

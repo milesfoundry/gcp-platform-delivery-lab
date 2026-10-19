@@ -3,6 +3,7 @@
 import unittest
 
 from gcp_token_identity import (
+    ExplicitGoogleCredentialTokenSource,
     IdentityVerificationError,
     USERINFO_URL,
     verify_access_token_principal,
@@ -42,6 +43,46 @@ def user_info(**overrides):
 
 
 class GoogleTokenIdentityTests(unittest.TestCase):
+    def test_explicit_credential_source_refreshes_without_ambient_discovery(self):
+        class Credentials:
+            def __init__(self):
+                self.valid = False
+                self.token = None
+                self.calls = []
+
+            def refresh(self, request):
+                self.calls.append(request)
+                self.valid = True
+                self.token = "refreshed-test-token"
+
+        credentials = Credentials()
+        refresh_request = object()
+        source = ExplicitGoogleCredentialTokenSource(credentials, refresh_request)
+        self.assertEqual(source.access_token(), "refreshed-test-token")
+        self.assertEqual(source.access_token(), "refreshed-test-token")
+        self.assertEqual(credentials.calls, [refresh_request])
+
+    def test_explicit_credential_source_sanitizes_refresh_failures_and_tokens(self):
+        class Credentials:
+            valid = False
+            token = None
+
+            def refresh(self, request):
+                raise RuntimeError("sensitive credential detail")
+
+        with self.assertRaises(IdentityVerificationError) as raised:
+            ExplicitGoogleCredentialTokenSource(Credentials(), object()).access_token()
+        self.assertNotIn("sensitive credential detail", str(raised.exception))
+
+        class InvalidTokenCredentials:
+            valid = True
+            token = "bad\ntoken"
+
+        with self.assertRaises(IdentityVerificationError):
+            ExplicitGoogleCredentialTokenSource(
+                InvalidTokenCredentials(), object()
+            ).access_token()
+
     def test_verified_user_subject_is_returned_without_redirects(self):
         transport = FakeTransport(FakeResponse(user_info()))
         principal = verify_access_token_principal(

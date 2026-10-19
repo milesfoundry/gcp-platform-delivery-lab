@@ -66,6 +66,15 @@ writer, provider adapter and controller with the same token source and identity
 transport. No credential-source launcher or deployed runtime is qualified, so
 live project deletion remains unqualified.
 
+`ExplicitGoogleCredentialTokenSource` can refresh a Google auth credential
+object supplied by its caller. The caller must construct that credential and
+refresh request explicitly, with the Google API scopes needed by the runtime
+and `openid`/`email` scopes needed for UserInfo principal verification. This
+adapter performs no Application Default Credentials lookup, credential-file
+discovery or login. It does not establish that the supplied credential came
+from an approved workload identity, nor does it configure IAM or deployment;
+trusted credential sourcing and deployed-runtime qualification remain open.
+
 Both roots use local state paths under `.terraform/`. This is not runner-loss
 recovery. The candidate remote state bucket, separate private backup, durable
 manifest and independent janitor are still absent. Never upload either root's
