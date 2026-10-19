@@ -692,8 +692,9 @@ Required manifest fields:
   The v3 Project schema uses `displayName` and `state`; the Billing API request
   sends only writable `billingAccountName`, omitting output-only fields.
   The adapter is not deployed or wired to a trusted launcher, and does not solve
-  creator Owner grants, billing-budget preflight, or a credential-source
-  launcher/deployed project-reclaimer runtime. It remains unqualified for live
+  creator Owner grants, a credential-source launcher, or a deployed
+  project-reclaimer runtime. A separate source-level billing-budget gate is
+  described in the activation update below. It remains unqualified for live
   use. Google
   documents project creation as a separate asynchronous operation
   from billing association; billing association can enable charges. See the
@@ -930,3 +931,25 @@ runner-loss and idempotency drills, and a reviewed CP-1C live drill packet.
 The Python adapter uses documented `if_generation_match` conditions for GCS
 uploads and downloads. See [Google's Python client reference](https://docs.cloud.google.com/python/docs/reference/storage/latest/google.cloud.storage.blob.Blob)
 and [Cloud Storage request-precondition guide](https://docs.cloud.google.com/storage/docs/request-preconditions).
+
+## Project activation and finance gate update — 2026-10-19
+
+`scripts/gcp_project_bootstrap.py` now resumes exact project creation, billing
+association and allowlisted API enablement under the launcher lease. API
+enablement is blocked behind a separate `budget_verification` state. The
+read-only `scripts/gcp_finance_preflight.py` checks current operator-supplied
+credit/alert evidence, exact project identity and billing association, then
+requires one monthly GBP budget filtered to the new project's numeric ID,
+excluding credits, covering the gross estimate, retaining the five actual and
+two forecast thresholds, and naming the exact recovery-project email channel
+from the run intent. It reads that Cloud Monitoring channel and requires an
+enabled, verified email endpoint without retaining its address. The budget
+disables default billing recipients and adds no project-level or Pub/Sub
+recipients. A successful check is appended to the
+ledger and must be fresh before API enablement; a
+missing budget releases the lease and waits for cost-operator reconciliation.
+The intent retains only evidence digests, not credit screenshots or recipient
+addresses. Mock tests prove source behavior only. No command has made a live
+GCP request, and live budget permission/delivery, trusted launcher CLI and IAM
+qualification, remote state/backup, independent cleanup and project activation
+remain open.

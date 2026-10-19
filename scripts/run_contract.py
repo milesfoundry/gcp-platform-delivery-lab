@@ -19,6 +19,7 @@ MAX_RUN_LIFETIME = timedelta(minutes=60)
 MAX_OPERATION_ATTEMPTS = 3
 MAX_MANIFEST_RESOURCES = 512
 MAX_DISCOVERY_RECEIPTS = 64
+MAX_BUDGET_VERIFICATION_RECEIPTS = 64
 MAX_DISCOVERED_PER_RECEIPT = 256
 RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,17}[a-z0-9])?$")
 PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
@@ -50,6 +51,7 @@ STATES = frozenset(
         "project_created",
         "billing_link_requested",
         "project_linked",
+        "budget_verification",
         "api_enablement",
         "provisioning",
         "ready",
@@ -69,7 +71,8 @@ TRANSITIONS = {
     "project_create_requested": {"project_created", "teardown_requested", "incomplete"},
     "project_created": {"billing_link_requested", "teardown_requested", "incomplete"},
     "billing_link_requested": {"project_linked", "teardown_requested", "incomplete"},
-    "project_linked": {"api_enablement", "teardown_requested", "incomplete"},
+    "project_linked": {"budget_verification", "teardown_requested", "incomplete"},
+    "budget_verification": {"api_enablement", "teardown_requested", "incomplete"},
     "api_enablement": {"provisioning", "teardown_requested", "incomplete"},
     "provisioning": {"ready", "teardown_requested", "incomplete"},
     "ready": {"teardown_requested", "incomplete"},
@@ -79,7 +82,8 @@ TRANSITIONS = {
     "project_retiring": {"controls_reclaiming", "incomplete"},
     "controls_reclaiming": {"closed", "incomplete"},
     "incomplete": {
-        "project_created", "project_linked", "api_enablement", "provisioning",
+        "project_created", "project_linked", "budget_verification",
+        "api_enablement", "provisioning",
         "teardown_requested", "cleaning", "auditing", "project_retiring",
         "controls_reclaiming",
     },
@@ -266,7 +270,7 @@ def validate_intent(
             "schema", "run_id", "scope", "created_at", "deadline_at", "source",
             "finance", "cleanup", "state", "resources", "controls",
             "independent_audit", "audit_receipts", "discovery_receipts",
-            "recovery_control_receipts",
+            "recovery_control_receipts", "budget_verification_receipts",
             "terraform_state", "operations",
         },
         "intent",
@@ -372,7 +376,10 @@ def validate_intent(
         {
             "currency", "gross_estimate_gbp", "net_cash_exposure_gbp",
             "available_credit_gbp", "credit_observed_at", "credit_expires_at",
-            "monthly_alert_threshold_gbp", "alerts_verified", "billing_account_id",
+            "credit_evidence_sha256", "monthly_alert_threshold_gbp",
+            "alerts_verified", "alert_delivery_verified_at",
+            "alert_delivery_evidence_sha256", "alert_notification_channel",
+            "billing_account_id",
         },
         "finance",
     )
@@ -422,12 +429,35 @@ def validate_intent(
         raise ContractError("observed credits must remain valid through the run deadline")
     if credit_observed > started + timedelta(minutes=2):
         raise ContractError("credit observation cannot postdate run creation")
+    credit_evidence = finance.get("credit_evidence_sha256")
+    if not isinstance(credit_evidence, str) or not SHA256.fullmatch(credit_evidence):
+        raise ContractError("finance.credit_evidence_sha256 must be a SHA-256 digest")
     _finite_positive_number(
         finance.get("monthly_alert_threshold_gbp"),
         "finance.monthly_alert_threshold_gbp",
     )
     if finance.get("alerts_verified") is not True:
         raise ContractError("finance.alerts_verified must be true before activation")
+    alert_verified_at = _timestamp(
+        finance.get("alert_delivery_verified_at"),
+        "finance.alert_delivery_verified_at",
+    )
+    if alert_verified_at > started + timedelta(minutes=2):
+        raise ContractError("alert delivery evidence cannot postdate run creation")
+    alert_evidence = finance.get("alert_delivery_evidence_sha256")
+    if not isinstance(alert_evidence, str) or not SHA256.fullmatch(alert_evidence):
+        raise ContractError("finance.alert_delivery_evidence_sha256 must be a SHA-256 digest")
+    notification_channel = finance.get("alert_notification_channel")
+    if (
+        not isinstance(notification_channel, str)
+        or re.fullmatch(
+            rf"projects/{re.escape(recovery_project_id)}/notificationChannels/[0-9]{{1,20}}",
+            notification_channel,
+        ) is None
+    ):
+        raise ContractError(
+            "finance.alert_notification_channel must name an exact recovery-project email channel"
+        )
 
     cleanup = _mapping(data.get("cleanup"), "cleanup")
     _only_keys(
@@ -494,6 +524,8 @@ def validate_intent(
             raise ContractError("new intent cannot contain discovery receipts")
         if data.get("recovery_control_receipts", []) != []:
             raise ContractError("new intent cannot contain recovery-control verification receipts")
+        if data.get("budget_verification_receipts", []) != []:
+            raise ContractError("new intent cannot contain budget verification receipts")
     return data
 
 
@@ -1017,10 +1049,76 @@ def validate_manifest(manifest: object) -> dict:
         raise ContractError("present recovery controls require a durable verification receipt")
     if data["state"] not in {"control_bootstrapping", "incomplete"} and not control_receipts:
         raise ContractError("post-bootstrap lifecycle states require a recovery-control verification receipt")
+    budget_receipts = data.get("budget_verification_receipts", [])
+    if not isinstance(budget_receipts, list) or len(budget_receipts) > MAX_BUDGET_VERIFICATION_RECEIPTS:
+        raise ContractError("budget verification receipt history exceeds its bound")
+    budget_receipt_fields = {
+        "sequence", "run_id", "project_id", "billing_account_id",
+        "project_number", "budget_name", "observed_at", "budget_response_sha256",
+        "alert_receipt_sha256", "credit_receipt_sha256", "verified_by",
+        "manifest_generation", "receipt_id",
+    }
+    previous_budget_time = None
+    for index, receipt in enumerate(budget_receipts, start=1):
+        receipt = _mapping(receipt, f"budget_verification_receipts[{index - 1}]")
+        _only_keys(receipt, budget_receipt_fields, f"budget_verification_receipts[{index - 1}]")
+        if set(receipt) != budget_receipt_fields:
+            raise ContractError("budget verification receipt fields are incomplete")
+        if (
+            receipt["sequence"] != index
+            or isinstance(receipt["sequence"], bool)
+            or not isinstance(receipt["sequence"], int)
+            or receipt["run_id"] != data["run_id"]
+            or receipt["project_id"] != data["scope"]["project_id"]
+            or receipt["billing_account_id"] != data["finance"]["billing_account_id"]
+        ):
+            raise ContractError("budget verification receipt sequence or scope is invalid")
+        project_number = receipt["project_number"]
+        if (
+            not isinstance(project_number, str)
+            or re.fullmatch(r"[0-9]{1,20}", project_number) is None
+        ):
+            raise ContractError("budget verification project number is malformed")
+        budget_name = receipt["budget_name"]
+        expected_prefix = f"{data['finance']['billing_account_id']}/budgets/"
+        if (
+            not isinstance(budget_name, str)
+            or not budget_name.startswith(expected_prefix)
+            or re.fullmatch(
+                re.escape(expected_prefix) + r"[A-Za-z0-9_-]{1,128}",
+                budget_name,
+            ) is None
+        ):
+            raise ContractError("budget verification name is outside the configured billing account")
+        observed_at = _timestamp(receipt["observed_at"], "budget verification observed_at")
+        if previous_budget_time is not None and observed_at < previous_budget_time:
+            raise ContractError("budget verification timestamps must be monotonic")
+        previous_budget_time = observed_at
+        for field in (
+            "budget_response_sha256", "alert_receipt_sha256",
+            "credit_receipt_sha256", "receipt_id",
+        ):
+            if not isinstance(receipt[field], str) or not SHA256.fullmatch(receipt[field]):
+                raise ContractError(f"budget verification {field} must be a SHA-256 digest")
+        if not isinstance(receipt["verified_by"], str) or re.fullmatch(
+            r"google-user-[A-Za-z0-9._~-]{1,255}", receipt["verified_by"]
+        ) is None:
+            raise ContractError("budget verification requires a verified Google user subject")
+        generation = receipt["manifest_generation"]
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+            raise ContractError("budget verification manifest generation must be positive")
+        receipt_payload = {key: value for key, value in receipt.items() if key != "receipt_id"}
+        receipt_canonical = json.dumps(
+            receipt_payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        if hashlib.sha256(receipt_canonical.encode("utf-8")).hexdigest() != receipt["receipt_id"]:
+            raise ContractError("budget verification receipt ID does not match its contents")
+    if data["state"] in {"api_enablement", "provisioning", "ready"} and not budget_receipts:
+        raise ContractError("API enablement requires a durable project budget verification receipt")
     if data["state"] in {
         "control_bootstrapping", "prepared", "project_create_requested",
         "project_created", "billing_link_requested", "project_linked",
-        "api_enablement",
+        "budget_verification", "api_enablement",
     } and resources:
         raise ContractError("workload resources cannot exist before API enablement completes")
     project_id = data["scope"]["project_id"]

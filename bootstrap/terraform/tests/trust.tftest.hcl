@@ -43,6 +43,10 @@ run "cost_alerts_cover_early_actual_and_forecast_thresholds" {
     error_message = "Alert against gross cost before trial credits."
   }
   assert {
+    condition     = google_billing_budget.cost_alerts["enabled"].budget_filter[0].projects == ["projects/${data.google_project.bootstrap.number}"]
+    error_message = "Project-scoped budgets must use the Cloud Billing project number, not the project ID."
+  }
+  assert {
     condition     = google_monitoring_notification_channel.cost_email["enabled"].type == "email"
     error_message = "Budget alerts must use the private email notification channel."
   }

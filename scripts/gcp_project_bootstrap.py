@@ -27,9 +27,13 @@ class ProjectBootstrapError(RuntimeError):
 
 
 class FinancePreflight(Protocol):
-    """Fresh read-only review of current credit, budget, and alert controls."""
+    """Fresh read-only review of credit, the project budget, and alert controls."""
 
     def verify(self, manifest: dict, *, observed_at: datetime) -> None: ...
+
+    def verify_project_budget(
+        self, manifest: dict, *, observed_at: datetime
+    ) -> dict | None: ...
 
 
 @dataclass(frozen=True)
@@ -52,7 +56,7 @@ class GCPProjectBootstrapper:
     ):
         if finance_preflight is None or not callable(
             getattr(finance_preflight, "verify", None)
-        ):
+        ) or not callable(getattr(finance_preflight, "verify_project_budget", None)):
             raise ValueError("a fresh GCP finance preflight is required")
         self.ledger = ledger
         self.provider = provider
@@ -78,7 +82,8 @@ class GCPProjectBootstrapper:
             raise ProjectBootstrapError("confirmation does not match the registered run intent")
         if snapshot.manifest["state"] not in {
             "prepared", "project_create_requested", "project_created",
-            "billing_link_requested", "project_linked", "api_enablement",
+            "billing_link_requested", "project_linked", "budget_verification",
+            "api_enablement",
         }:
             raise ProjectBootstrapError("run is not in a project activation state")
 
@@ -188,6 +193,30 @@ class GCPProjectBootstrapper:
                     continue
 
                 if state == "project_linked":
+                    snapshot = self.ledger.advance_project_lifecycle(
+                        run_id,
+                        expected_generation=snapshot.generation,
+                        lease_owner="launcher",
+                        state="budget_verification",
+                        now=self.clock(),
+                    )
+                    continue
+
+                if state == "budget_verification":
+                    proof = self.finance_preflight.verify_project_budget(
+                        snapshot.manifest, observed_at=self.clock()
+                    )
+                    if proof is None:
+                        return ProjectBootstrapResult(
+                            snapshot, "awaiting_project_budget"
+                        )
+                    snapshot = self.ledger.record_budget_verification(
+                        run_id,
+                        expected_generation=snapshot.generation,
+                        lease_owner="launcher",
+                        **proof,
+                        now=self.clock(),
+                    )
                     snapshot = self.ledger.advance_project_lifecycle(
                         run_id,
                         expected_generation=snapshot.generation,

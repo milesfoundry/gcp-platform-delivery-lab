@@ -89,6 +89,17 @@ requires a verified human principal or the matching per-run Cloud Run service
 account. It is not wired to a deployed launcher or live GCP identity. Its
 presence does not authorize cloud activation; no cloud API call is made by CI
 or this runbook.
+The resumable `gcp_project_bootstrap.py` runner now gates run-project API
+enablement behind `budget_verification`. Its finance preflight re-reads the
+exact project and billing link, then requires one monthly GBP budget scoped to
+that project's numeric ID, excluding credits and retaining all five actual and
+two forecast thresholds plus the exact recovery-project email channel from the
+run intent, with default billing, project-level, and Pub/Sub recipients disabled.
+Fresh credit and alert-delivery evidence is retained by digest. If no exact budget exists, the runner releases
+its lease and waits for the cost operator to reconcile and test the budget
+before resuming. `gcp_finance_preflight.py` and the runner are mock-tested;
+they do not establish live budget permissions, notification delivery, or cloud
+identity qualification.
 Fake controller tests cover a create committed before a lost response,
 cross-run project-ID rejection before provider access, and repeated cleanup
 after a confirmed delete without a second delete call. These verify the local

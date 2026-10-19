@@ -59,6 +59,7 @@ EVENT_TYPES = frozenset(
         "inventory_discovered",
         "recovery_controls_verified",
         "audit_receipt_recorded",
+        "budget_verification_recorded",
         "project_lifecycle_state_changed",
     }
 )
@@ -523,6 +524,27 @@ class RunLedger:
             raise LedgerConflict("inventory registration requires one appended discovery receipt")
         else:
             expected_resources = []
+        old_budgets = current.manifest.get("budget_verification_receipts", [])
+        new_budgets = candidate.get("budget_verification_receipts", [])
+        if new_budgets[:len(old_budgets)] != old_budgets:
+            raise LedgerConflict("budget verification receipt history is append-only")
+        if len(new_budgets) - len(old_budgets) > 1:
+            raise LedgerConflict("one budget verification receipt may be recorded per transition")
+        budget_delta = len(new_budgets) - len(old_budgets)
+        if budget_delta == 1:
+            appended = new_budgets[-1]
+            if event_type != "budget_verification_recorded":
+                raise LedgerConflict(
+                    "budget verification receipts require the finance preflight operation"
+                )
+            if lease_owner != "launcher":
+                raise LedgerConflict("budget verification receipt requires the launcher lease")
+            if appended["manifest_generation"] != current.generation:
+                raise LedgerConflict(
+                    "budget verification must bind the current manifest generation"
+                )
+        elif event_type == "budget_verification_recorded":
+            raise LedgerConflict("budget verification event requires one appended receipt")
         if audit_delta and discovery_delta:
             raise LedgerConflict("audit and discovery receipts require separate ledger transitions")
 
@@ -633,13 +655,15 @@ class RunLedger:
         if candidate["state"] != current.manifest["state"]:
             if candidate["state"] in {
                 "project_create_requested", "project_created",
-                "billing_link_requested", "project_linked", "api_enablement",
+                "billing_link_requested", "project_linked", "budget_verification",
+                "api_enablement",
                 "provisioning",
             }:
                 self._validate_project_lifecycle_transition(
                     candidate,
                     lease_owner=lease_owner,
                     event_type=event_type,
+                    now=at,
                 )
             try:
                 next_state(current.manifest["state"], candidate["state"])
@@ -665,6 +689,7 @@ class RunLedger:
         *,
         lease_owner: str,
         event_type: str,
+        now: datetime,
     ) -> None:
         """Require durable provider results before advancing project setup."""
         if lease_owner != "launcher" or event_type != "project_lifecycle_state_changed":
@@ -718,6 +743,20 @@ class RunLedger:
             raise LedgerConflict(
                 "project lifecycle requires a successful exact billing-link result"
             )
+        if target == "budget_verification" and not billing_ready:
+            raise LedgerConflict(
+                "budget verification requires a successful exact billing-link result"
+            )
+        if target == "api_enablement":
+            receipts = candidate.get("budget_verification_receipts", [])
+            if not receipts:
+                raise LedgerConflict("API enablement requires verified per-project budget controls")
+            receipt = receipts[-1]
+            observed_at = _parse_time(receipt["observed_at"], "budget verification observed_at")
+            if observed_at > now + timedelta(minutes=2):
+                raise LedgerConflict("budget verification receipt is from the future")
+            if now - observed_at > timedelta(minutes=30):
+                raise LedgerConflict("budget verification receipt is stale")
         if target == "provisioning":
             missing = [
                 service for service in candidate["scope"]["enabled_api_services"]
@@ -753,6 +792,95 @@ class RunLedger:
             event_type="project_lifecycle_state_changed",
             now=now,
         )
+
+    def record_budget_verification(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        lease_owner: str,
+        project_number: str,
+        budget_name: str,
+        observed_at: datetime,
+        budget_response_sha256: str,
+        alert_receipt_sha256: str,
+        credit_receipt_sha256: str,
+        verified_by: str,
+        now: datetime | None = None,
+    ) -> LedgerSnapshot:
+        """Append a current, identity-bound project budget verification receipt."""
+        if lease_owner != "launcher":
+            raise LedgerConflict("per-run budget verification requires the launcher lease")
+        at = now or self._clock()
+        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+            raise ContractError("budget observation must include a timezone")
+        observed_at = observed_at.astimezone(timezone.utc)
+        if observed_at > at + timedelta(minutes=2):
+            raise ContractError("budget observation cannot be materially in the future")
+        if at - observed_at > timedelta(minutes=30):
+            raise ContractError("budget observation is stale")
+        for name, value in (
+            ("project number", project_number),
+            ("budget name", budget_name),
+            ("verified user", verified_by),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ContractError(f"budget verification {name} is required")
+        for name, value in (
+            ("budget response", budget_response_sha256),
+            ("alert receipt", alert_receipt_sha256),
+            ("credit receipt", credit_receipt_sha256),
+        ):
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise ContractError(f"budget verification {name} digest is malformed")
+        current = self.read(run_id)
+        if current.manifest["state"] != "budget_verification":
+            raise LedgerConflict("project budget can only be verified at its lifecycle gate")
+        stable = {
+            "run_id": run_id,
+            "project_id": current.manifest["scope"]["project_id"],
+            "billing_account_id": current.manifest["finance"]["billing_account_id"],
+            "project_number": project_number,
+            "budget_name": budget_name,
+            "observed_at": _format_time(observed_at),
+            "budget_response_sha256": budget_response_sha256,
+            "alert_receipt_sha256": alert_receipt_sha256,
+            "credit_receipt_sha256": credit_receipt_sha256,
+            "verified_by": verified_by,
+        }
+        if current.generation != expected_generation:
+            if any(
+                all(receipt.get(key) == value for key, value in stable.items())
+                for receipt in current.manifest.get("budget_verification_receipts", [])
+            ):
+                return current
+            raise GenerationConflict("manifest generation is stale")
+        self._require_active_lease(current, lease_owner, at)
+        receipt = {
+            "sequence": len(current.manifest.get("budget_verification_receipts", [])) + 1,
+            **stable,
+            "manifest_generation": current.generation,
+        }
+        receipt["receipt_id"] = hashlib.sha256(_canonical_json(receipt)).hexdigest()
+        candidate = json.loads(json.dumps(current.manifest))
+        candidate.setdefault("budget_verification_receipts", []).append(receipt)
+        try:
+            return self.replace(
+                run_id,
+                expected_generation=expected_generation,
+                lease_owner=lease_owner,
+                manifest=candidate,
+                event_type="budget_verification_recorded",
+                now=at,
+            )
+        except (ConnectionError, TimeoutError):
+            latest = self.read(run_id)
+            if any(
+                item["receipt_id"] == receipt["receipt_id"]
+                for item in latest.manifest.get("budget_verification_receipts", [])
+            ):
+                return latest
+            raise
 
     def record_recovery_control_verification(
         self,

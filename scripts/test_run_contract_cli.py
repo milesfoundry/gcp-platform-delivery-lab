@@ -54,8 +54,12 @@ def manifest():
             "available_credit_gbp": 50,
             "credit_observed_at": "2026-10-18T11:55:00Z",
             "credit_expires_at": "2026-11-18T00:00:00Z",
+            "credit_evidence_sha256": "d" * 64,
             "monthly_alert_threshold_gbp": 70,
             "alerts_verified": True,
+            "alert_delivery_verified_at": "2026-10-18T11:50:00Z",
+            "alert_delivery_evidence_sha256": "e" * 64,
+            "alert_notification_channel": "projects/recovery-lab-456/notificationChannels/123",
         },
         "cleanup": {
             "service_account": f"{run_id}-reaper@recovery-lab-456.iam.gserviceaccount.com",

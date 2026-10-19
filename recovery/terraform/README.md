@@ -67,15 +67,22 @@ local state.
 
 The source-level activation runner is `scripts/gcp_project_bootstrap.py`. It
 requires the run's `prepared` receipt, the exact project ID and registered
-intent digest as confirmations, a fresh injected finance preflight, and an
-absent-project read immediately before the create phase. It journals each
-project, billing, and API operation before the provider call, resumes pending
-operations by exact ID, and advances ledger state only after successful
-operation receipts. The ledger rejects direct edits that skip those operation
-gates. The runner has mocked-provider qualification only; no credentialed CLI,
-concrete budget/credit verifier, or live project activation is qualified yet.
-Do not use it for a live run until the concrete preflight and user-authorized
-activation path have been completed and reviewed.
+intent digest as confirmations, fresh operator evidence for available credit
+and alert delivery, and an absent-project read immediately before the create
+phase. After billing is linked, `scripts/gcp_finance_preflight.py` performs
+read-only checks for the exact active project, billing account, and one
+project-filtered GBP gross-cost budget with the expected thresholds and email
+route. The budget must use the exact recovery-project email channel from the
+run intent and suppress default, project-level, and Pub/Sub recipient routes.
+The ledger records that budget receipt before it permits API enablement. If the budget is absent, the runner stops in
+`budget_verification`; a cost operator must reconcile and test the run-specific
+budget before resuming. The runner journals each project, billing, and API
+operation before the provider call and resumes pending operations by exact ID.
+These components have fake-provider qualification only: the user-credential
+launcher CLI and live project activation are not qualified. Do not use them
+for a live run until launcher identity, IAM, budget delivery, recovery controls,
+private state/backup and the separately authorized activation path have been
+reviewed and qualified.
 
 The run-project provider alias has no managed resources while the retirement
 IAM flag is false. No workload IAM, project creation, billing attachment,

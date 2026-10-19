@@ -18,11 +18,29 @@ class FakeFinancePreflight:
     def __init__(self, error=None):
         self.error = error
         self.calls = []
+        self.budget_missing = False
 
     def verify(self, manifest, *, observed_at):
         self.calls.append((manifest["run_id"], observed_at))
         if self.error:
             raise self.error
+
+    def verify_project_budget(self, manifest, *, observed_at):
+        if self.error:
+            raise self.error
+        if self.budget_missing:
+            return None
+        return {
+            "project_number": "123456789012",
+            "budget_name": (
+                f"{manifest['finance']['billing_account_id']}/budgets/test-budget"
+            ),
+            "observed_at": observed_at,
+            "budget_response_sha256": "a" * 64,
+            "alert_receipt_sha256": "b" * 64,
+            "credit_receipt_sha256": "c" * 64,
+            "verified_by": "google-user-test-subject",
+        }
 
 
 class FakeProjectProvider:
@@ -159,6 +177,18 @@ class GCPProjectBootstrapperTests(unittest.TestCase):
         self.assertEqual(result.status, "project_preflight_not_absent")
         self.assertEqual(result.snapshot.manifest["state"], "prepared")
         self.assertEqual(self.provider.submit_calls, [])
+
+    def test_missing_run_budget_holds_before_any_run_api_is_enabled(self):
+        self.finance.budget_missing = True
+
+        waiting = self.run_bootstrap()
+
+        self.assertEqual(
+            waiting.status, "awaiting_project_budget"
+        )
+        self.assertEqual(waiting.snapshot.manifest["state"], "budget_verification")
+        self.assertFalse(any(call[1] == SERVICE_TYPE for call in self.provider.submit_calls))
+        self.assertIsNone(self.ledger.read(RUN_ID).metadata["lease"]["owner"])
 
     def test_lost_project_create_response_reconciles_without_duplicate_create(self):
         self.provider.lose_project_create_response = True

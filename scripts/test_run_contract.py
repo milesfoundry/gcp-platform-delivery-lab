@@ -70,8 +70,12 @@ def intent():
             "available_credit_gbp": 50,
             "credit_observed_at": "2026-10-18T11:55:00Z",
             "credit_expires_at": "2026-11-18T00:00:00Z",
+            "credit_evidence_sha256": "d" * 64,
             "monthly_alert_threshold_gbp": 70,
             "alerts_verified": True,
+            "alert_delivery_verified_at": "2026-10-18T11:50:00Z",
+            "alert_delivery_evidence_sha256": "e" * 64,
+            "alert_notification_channel": "projects/recovery-lab-456/notificationChannels/123",
         },
         "cleanup": {
             "service_account": "lab-20261018-a1b2-reaper@recovery-lab-456.iam.gserviceaccount.com",
@@ -137,6 +141,29 @@ def attach_control_receipt(candidate, *, generation=1):
         json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     candidate.setdefault("recovery_control_receipts", []).append(receipt)
+
+
+def attach_budget_receipt(candidate, *, generation=1):
+    receipt = {
+        "sequence": 1,
+        "run_id": candidate["run_id"],
+        "project_id": candidate["scope"]["project_id"],
+        "billing_account_id": candidate["finance"]["billing_account_id"],
+        "project_number": "123456789012",
+        "budget_name": (
+            f"{candidate['finance']['billing_account_id']}/budgets/test-budget"
+        ),
+        "observed_at": "2026-10-18T12:00:00Z",
+        "budget_response_sha256": "a" * 64,
+        "alert_receipt_sha256": "b" * 64,
+        "credit_receipt_sha256": "d" * 64,
+        "verified_by": "google-user-12345678901234567890",
+        "manifest_generation": generation,
+    }
+    receipt["receipt_id"] = hashlib.sha256(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    candidate.setdefault("budget_verification_receipts", []).append(receipt)
 
 
 def audit_receipt(sequence, phase, *, checks=None, result="passed", complete=True):
@@ -397,6 +424,7 @@ class RunIntentTests(unittest.TestCase):
         for control in candidate["controls"]:
             control["status"] = "present"
         attach_control_receipt(candidate)
+        attach_budget_receipt(candidate)
         request_sha = "c" * 64
         phase = "provisioning"
         op_id = operation_id(
@@ -559,6 +587,14 @@ class RunIntentTests(unittest.TestCase):
             candidate[section][key] = False
             with self.subTest(key=key), self.assertRaises(ContractError):
                 validate_intent(candidate, now=NOW)
+
+    def test_alert_notification_channel_must_belong_to_exact_recovery_project(self):
+        candidate = intent()
+        candidate["finance"]["alert_notification_channel"] = (
+            "projects/untrusted-project/notificationChannels/123"
+        )
+        with self.assertRaisesRegex(ContractError, "exact recovery-project email channel"):
+            validate_intent(candidate, now=NOW)
 
     def test_unknown_intent_fields_fail_closed(self):
         candidate = intent()

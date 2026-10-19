@@ -240,8 +240,28 @@ def advance_ledger_to_provisioning(ledger, snapshot, now):
         RUN_ID,
         expected_generation=snapshot.generation,
         lease_owner="launcher",
-        state="api_enablement",
+        state="budget_verification",
         now=now + timedelta(milliseconds=800),
+    )
+    snapshot = ledger.record_budget_verification(
+        RUN_ID,
+        expected_generation=snapshot.generation,
+        lease_owner="launcher",
+        project_number="123456789012",
+        budget_name=f"{run['finance']['billing_account_id']}/budgets/test-budget",
+        observed_at=now + timedelta(milliseconds=805),
+        budget_response_sha256="a" * 64,
+        alert_receipt_sha256="b" * 64,
+        credit_receipt_sha256="c" * 64,
+        verified_by="google-user-test-subject",
+        now=now + timedelta(milliseconds=810),
+    )
+    snapshot = ledger.advance_project_lifecycle(
+        RUN_ID,
+        expected_generation=snapshot.generation,
+        lease_owner="launcher",
+        state="api_enablement",
+        now=now + timedelta(milliseconds=820),
     )
     for index, service in enumerate(run["scope"]["enabled_api_services"]):
         record_create(
