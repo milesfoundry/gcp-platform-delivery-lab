@@ -317,6 +317,14 @@ class GCPCleanupAdapterTests(unittest.TestCase):
             adapter(transport).submit("delete", "gcp.gke.cluster", resource_id, {})
         self.assertEqual(transport.calls, [])
 
+        rejected_transport = FakeTransport([])
+        with self.assertRaisesRegex(CleanupAdapterError, "did not authorize this exact cluster"):
+            adapter(
+                rejected_transport,
+                cluster_delete_authorizer=lambda exact_id: False,
+            ).submit("delete", "gcp.gke.cluster", resource_id, {})
+        self.assertEqual(rejected_transport.calls, [])
+
         approved = []
         reviewed = adapter(
             FakeTransport([FakeResponse(200, {

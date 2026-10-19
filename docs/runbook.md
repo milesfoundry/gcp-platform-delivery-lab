@@ -43,7 +43,7 @@ generations separately when bucket retention is active. A bucket with active
 soft-delete retention cannot be cleaned within the lab deadline and is rejected
 by the mutation adapter. The cleanup adapter has not been wired to the ledger
 controller or deployed identities. Its cluster review callback is an external
-gate, not proof that API deletion protection was disabled.
+gate, not proof of Terraform state or a GKE API deletion-protection setting.
 Independent provider discovery/audit, API-to-ledger principal binding, IAM
 isolation and live provider behavior remain unqualified. GCS deletion verifies
 the project number, bucket ownership and London bucket location; it requires an
@@ -151,8 +151,11 @@ because validate passes. Required outstanding gates:
    deletion-only adapter into the controller, and deploy the out-of-band reaper.
    Extend provider drills to delayed responses and independent inventory before
    a separately approved bounded cloud drill. Use private remote state and its
-   restore procedure, not local job state. Verify and change cluster deletion
-   protection explicitly for an approved teardown.
+   restore procedure, not local job state. For the REST cleanup path, retain
+   Terraform state and require the adapter's separate exact-cluster review
+   before deletion. The provider's `deletion_protection` flag only guards
+   Terraform destroy: if using Terraform to destroy, set it false and apply
+   that state change first. It is not a GKE API protection field.
 6. Add application cloud IAM, Pub/Sub/GCS resources and adapters, image release
    provenance, network policies and workload deployment.
 
