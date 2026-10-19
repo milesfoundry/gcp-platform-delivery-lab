@@ -743,6 +743,34 @@ class RunLedgerTests(unittest.TestCase):
                 now=self.now + timedelta(seconds=33),
             )
 
+    def test_independent_audit_retry_reconciles_a_committed_lost_response(self):
+        snapshot = self.lease_in_auditing()
+        self.store.fail_after_replace = True
+        arguments = {
+            "expected_generation": snapshot.generation,
+            "lease_owner": "auditor:external-auditor",
+            "auditor_id": "external-auditor",
+            "phase": "workload",
+            "result": "passed",
+            "complete": True,
+            "inventory_sha256": "a" * 64,
+            "evidence_sha256": "b" * 64,
+            "checks": {"resource_inventory_complete": True, "resources_absent": True},
+            "now": self.now + timedelta(seconds=32),
+        }
+        with self.assertRaises(ConnectionError):
+            self.ledger.record_independent_audit(RUN_ID, **arguments)
+        retried = self.ledger.record_independent_audit(RUN_ID, **arguments)
+        self.assertEqual(
+            retried.manifest["audit_receipts"][0]["manifest_generation"],
+            snapshot.generation,
+        )
+        self.assertEqual(len(retried.manifest["audit_receipts"]), 1)
+        with self.assertRaises(LedgerConflict):
+            self.ledger.record_independent_audit(
+                RUN_ID, **{**arguments, "evidence_sha256": "c" * 64}
+            )
+
     def test_independent_audit_requires_a_separate_named_lease_and_exact_checks(self):
         snapshot = self.lease_in_auditing()
         arguments = {

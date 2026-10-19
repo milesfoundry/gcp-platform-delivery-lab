@@ -505,7 +505,10 @@ Required manifest fields:
   provider listings, bearer credentials or sensitive Terraform values in the
   manifest. The ledger rejects receipt edits and freezes the manifest after
   `closed`; only a separately authenticated adapter can establish that the
-  named auditor lease belongs to a genuinely independent identity.
+  named auditor lease belongs to a genuinely independent identity. A receipt
+  write retried after response loss must reuse its timestamp, inventory and
+  evidence fingerprints, and checks; the ledger reconciles the matching audit
+  observation without appending a duplicate.
 - Gross cost estimate, measured gross usage, currency, credit balance/expiry
   observation time, net-cash estimate and later billing reconciliation reference.
 - Immutable links/checksums to sanitized evidence and an explicit limitation list.

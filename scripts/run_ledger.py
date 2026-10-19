@@ -797,7 +797,9 @@ class RunLedger:
         The caller supplies digests for the external inventory and evidence
         artifact; raw provider listings remain outside the run manifest. The
         auditor must hold a separately named lease. Mapping cloud principals
-        to this owner name remains the responsibility of a future adapter.
+        to this owner name remains the responsibility of a future adapter. A
+        retry after a lost write response must reuse the same observation time,
+        fingerprints and checks so it reconciles to the original receipt.
         """
         self._validate_generation(expected_generation)
         if not isinstance(auditor_id, str) or re.fullmatch(
@@ -809,30 +811,13 @@ class RunLedger:
         at = now or self._clock()
         current = self.read(run_id)
         self._require_active_lease(current, lease_owner, at)
-        if current.generation != expected_generation:
-            raise GenerationConflict("manifest generation is stale")
         if phase == "workload":
-            if current.manifest["state"] != "auditing":
-                raise LedgerConflict("workload audit is only accepted in auditing state")
             expected_checks = {"resource_inventory_complete", "resources_absent"}
         elif phase == "closure":
-            if current.manifest["state"] != "controls_reclaiming":
-                raise LedgerConflict("closure audit requires controls_reclaiming state")
-            if any(
-                item["status"] != "deleted"
-                for item in current.manifest["resources"] + current.manifest["controls"]
-            ):
-                raise LedgerConflict("closure audit requires all workload and control resources deleted")
             expected_checks = {
                 "resource_inventory_complete", "resources_absent", "project_absent",
                 "billing_unlinked", "budget_reconciled", "recovery_controls_absent",
             }
-            prior = current.manifest.get("independent_audit")
-            if (
-                not isinstance(prior, dict) or prior.get("phase") != "workload"
-                or prior.get("result") != "passed"
-            ):
-                raise LedgerConflict("closure audit requires a passed workload audit")
         else:
             raise ContractError("audit receipt phase is unsupported")
         if not isinstance(checks, dict) or set(checks) != expected_checks or any(
@@ -849,6 +834,10 @@ class RunLedger:
             r"[0-9a-f]{64}", evidence_sha256
         ) is None:
             raise ContractError("audit evidence fingerprint must be a SHA-256 hex digest")
+        if not isinstance(result, str) or result not in {
+            "passed", "failed", "incomplete"
+        }:
+            raise ContractError("audit receipt result is unsupported")
         all_checks_passed = all(checks.values())
         if result == "passed" and (not complete or not all_checks_passed):
             raise ContractError("passed audit requires complete coverage and passing checks")
@@ -856,8 +845,52 @@ class RunLedger:
             raise ContractError("failed audit requires at least one failed check")
         if result == "incomplete" and complete:
             raise ContractError("incomplete audit cannot claim complete coverage")
-        if result not in {"passed", "failed", "incomplete"}:
-            raise ContractError("audit receipt result is unsupported")
+        observed_at = _format_time(at)
+        stable_fields = {
+            "run_id": run_id,
+            "project_id": current.manifest["scope"]["project_id"],
+            "recovery_project_id": current.manifest["scope"]["recovery_project_id"],
+            "phase": phase,
+            "result": result,
+            "complete": complete,
+            "auditor_id": auditor_id,
+            "observed_at": observed_at,
+            "inventory_sha256": inventory_sha256,
+            "evidence_sha256": evidence_sha256,
+            "checks": checks,
+        }
+        same_observation = [
+            receipt
+            for receipt in current.manifest.get("audit_receipts", [])
+            if receipt["phase"] == phase
+            and receipt["auditor_id"] == auditor_id
+            and receipt["observed_at"] == observed_at
+        ]
+        if same_observation:
+            existing = same_observation[-1]
+            if all(existing.get(key) == value for key, value in stable_fields.items()):
+                return current
+            raise LedgerConflict("audit observation key already has different evidence")
+        if current.generation != expected_generation:
+            raise GenerationConflict("manifest generation is stale")
+        if phase == "workload" and current.manifest["state"] != "auditing":
+            raise LedgerConflict("workload audit is only accepted in auditing state")
+        if phase == "closure":
+            if current.manifest["state"] != "controls_reclaiming":
+                raise LedgerConflict("closure audit requires controls_reclaiming state")
+            if any(
+                item["status"] != "deleted"
+                for item in current.manifest["resources"] + current.manifest["controls"]
+            ):
+                raise LedgerConflict(
+                    "closure audit requires all workload and control resources deleted"
+                )
+            prior = current.manifest.get("independent_audit")
+            if (
+                not isinstance(prior, dict) or prior.get("phase") != "workload"
+                or prior.get("result") != "passed"
+            ):
+                raise LedgerConflict("closure audit requires a passed workload audit")
         receipt = {
             "sequence": len(current.manifest.get("audit_receipts", [])) + 1,
             "run_id": run_id,
@@ -867,7 +900,7 @@ class RunLedger:
             "result": result,
             "complete": complete,
             "auditor_id": auditor_id,
-            "observed_at": _format_time(at),
+            "observed_at": observed_at,
             "inventory_sha256": inventory_sha256,
             "evidence_sha256": evidence_sha256,
             "manifest_generation": current.generation,
