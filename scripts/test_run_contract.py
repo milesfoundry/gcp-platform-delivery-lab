@@ -167,6 +167,18 @@ class RunIntentTests(unittest.TestCase):
     def test_provider_operation_intent_and_result_are_exact_and_deterministic(self):
         candidate = intent()
         resource_id = f"projects/{PROJECT}/global/networks/{RUN_ID}-network"
+        candidate["state"] = "provisioning"
+        candidate["resources"] = [
+            {
+                "type": "gcp.compute.network",
+                "id": resource_id,
+                "ownership_proof": "run_name",
+                "status": "expected",
+                "delete_attempts": 0,
+            }
+        ]
+        for control in candidate["controls"]:
+            control["status"] = "present"
         request_sha = "c" * 64
         phase = "provisioning"
         op_id = operation_id(
