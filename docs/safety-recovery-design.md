@@ -721,8 +721,13 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    project checks, independently administered auditor identity, API-to-ledger
    principal binding, and the real provider adapter remain open. The
    ledger fake covers response-loss retries and CAS conflicts; extend
-   fake-provider drills for resource loss-after-create, idempotent cleanup and
-   cross-run denial before any hosted credentials are added.
+   fake-provider coverage now includes a create committed before a lost response,
+   exact-ID reconciliation, idempotent cleanup after confirmed deletion, and
+   rejection of another run's project ID before any provider call. This is an
+   application/ledger contract, not proof of Google IAM cross-run denial. Extend
+   deletion-response-loss and independently discovered inventory drills; the
+   real provider adapter and actual IAM boundary remain open before hosted
+   cleanup credentials are added.
 6. `.github/workflows/validate.yaml` remains credential-free for CI and runs
    schema, Terraform-render, cleanup, state, and negative-boundary checks. Add
    lifecycle workflow only after the reaper and cleanup path are deployed and

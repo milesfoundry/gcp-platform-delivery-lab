@@ -32,6 +32,8 @@ class FakeOperationProvider:
         self.submit_calls.append((action, resource_type, resource_id, deepcopy(request)))
         if action == "create" and self.create_before_loss:
             self.resources.add(resource_id)
+        elif action == "delete":
+            self.resources.discard(resource_id)
         if self.lose_create_response:
             raise ConnectionError("simulated lost provider response")
         return self.submit_receipt
@@ -156,6 +158,56 @@ class RecoveryControllerTests(unittest.TestCase):
                 for event in unresolved.snapshot.manifest["operations"]
             )
         )
+
+    def test_operation_for_a_different_run_project_is_rejected_before_provider_call(self):
+        foreign_id = self.resource_id.replace(
+            self.intent["scope"]["project_id"], "another-lab-456", 1
+        )
+        with self.assertRaisesRegex(ContractError, "exact run inventory"):
+            self.controller.execute(
+                RUN_ID,
+                lease_owner="launcher",
+                attempt=1,
+                action="create",
+                resource_type="gcp.compute.network",
+                resource_id=foreign_id,
+                request={"name": foreign_id.rsplit("/", 1)[-1]},
+            )
+        self.assertEqual(self.provider.submit_calls, [])
+        self.assertEqual(self.provider.lookups, [])
+
+    def test_cleanup_is_idempotent_after_provider_confirms_delete(self):
+        current = self.ledger.read(RUN_ID)
+        candidate = deepcopy(current.manifest)
+        candidate["state"] = "teardown_requested"
+        candidate["resources"][0]["status"] = "present"
+        self.provider.resources.add(self.resource_id)
+        self.provider.submit_receipt = ProviderReceipt(
+            "succeeded", "d" * 64
+        )
+        self.ledger.replace(
+            RUN_ID,
+            expected_generation=current.generation,
+            lease_owner="launcher",
+            manifest=candidate,
+            now=self.now + timedelta(seconds=30),
+        )
+        self.controller.clock = lambda: self.now + timedelta(seconds=40)
+
+        snapshot, executions = self.controller.cleanup(
+            RUN_ID, lease_owner="launcher"
+        )
+        self.assertEqual([item.state for item in executions], ["succeeded"])
+        self.assertEqual(snapshot.manifest["resources"][0]["status"], "deleted")
+        self.assertNotIn(self.resource_id, self.provider.resources)
+        self.assertEqual(len(self.provider.submit_calls), 1)
+
+        repeated_snapshot, repeated_executions = self.controller.cleanup(
+            RUN_ID, lease_owner="launcher"
+        )
+        self.assertEqual(repeated_snapshot, snapshot)
+        self.assertEqual(repeated_executions, [])
+        self.assertEqual(len(self.provider.submit_calls), 1)
 
     def test_provider_call_requires_a_fresh_active_lease_check(self):
         with patch.object(

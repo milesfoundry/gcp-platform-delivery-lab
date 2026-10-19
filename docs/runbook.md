@@ -32,6 +32,11 @@ complete; only a terminal result resolves an intent. The credential-free
 an injected provider adapter, and can run ordered cleanup against that adapter.
 It has no GCP adapter and cannot create resources itself. No cloud resource
 creation is authorized by these files.
+Fake controller tests cover a create committed before a lost response,
+cross-run project-ID rejection before provider access, and repeated cleanup
+after a confirmed delete without a second delete call. These verify the local
+ledger/controller contract only; they do not establish Google IAM isolation or
+provider behavior.
 
 Workload provider operations must target an exact `(type, id)` already declared
 in the run manifest inventory. A terminal successful create or delete result and
