@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from gcp_token_identity import IdentityVerificationError, VerifiedGoogleUser
 from run_contract import ContractError, _audit_summary, operation_id
-from recovery_controller import ProviderReceipt, RecoveryController
+from recovery_controller import ProviderReceipt, RecoveryController, request_fingerprint
 from run_ledger import (
     GenerationConflict,
     GcsObjectStore,
@@ -150,6 +150,126 @@ def prepare_control_bootstrap(ledger, snapshot, now):
     )
 
 
+def advance_ledger_to_provisioning(ledger, snapshot, now):
+    """Advance through project setup using durable successful fake results."""
+    if snapshot.manifest["state"] != "prepared":
+        snapshot = prepare_control_bootstrap(ledger, snapshot, now)
+    run = snapshot.manifest
+    project_id = run["scope"]["project_id"]
+    project_resource = f"projects/{project_id}"
+
+    def record_create(resource_type, resource_id, request, at):
+        nonlocal snapshot
+        request_sha = request_fingerprint(request)
+        snapshot = ledger.record_operation_intent(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            lease_owner="launcher",
+            attempt=1,
+            action="create",
+            resource_type=resource_type,
+            resource_id=resource_id,
+            request_sha256=request_sha,
+            now=at,
+        )
+        intent_event = next(
+            event for event in snapshot.manifest["operations"]
+            if event["kind"] == "intent"
+            and event["attempt"] == 1
+            and event["action"] == "create"
+            and event["resource_type"] == resource_type
+            and event["resource_id"] == resource_id
+            and event["request_sha256"] == request_sha
+        )
+        snapshot = ledger.record_operation_result(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            lease_owner="launcher",
+            operation_id_value=intent_event["operation_id"],
+            outcome="succeeded",
+            response_sha256="a" * 64,
+            now=at + timedelta(milliseconds=1),
+        )
+
+    snapshot = ledger.advance_project_lifecycle(
+        RUN_ID,
+        expected_generation=snapshot.generation,
+        lease_owner="launcher",
+        state="project_create_requested",
+        now=now + timedelta(milliseconds=500),
+    )
+    record_create(
+        "gcp.resourcemanager.project",
+        project_resource,
+        {
+            "project_id": project_id,
+            "display_name": RUN_ID,
+            "parent": run["scope"]["parent"],
+            "labels": {"lab_run_id": RUN_ID},
+        },
+        now + timedelta(milliseconds=550),
+    )
+    snapshot = ledger.advance_project_lifecycle(
+        RUN_ID,
+        expected_generation=snapshot.generation,
+        lease_owner="launcher",
+        state="project_created",
+        now=now + timedelta(milliseconds=600),
+    )
+    snapshot = ledger.advance_project_lifecycle(
+        RUN_ID,
+        expected_generation=snapshot.generation,
+        lease_owner="launcher",
+        state="billing_link_requested",
+        now=now + timedelta(milliseconds=650),
+    )
+    record_create(
+        "gcp.billing.project_billing_info",
+        project_resource,
+        {"billing_account_name": run["finance"]["billing_account_id"]},
+        now + timedelta(milliseconds=700),
+    )
+    snapshot = ledger.advance_project_lifecycle(
+        RUN_ID,
+        expected_generation=snapshot.generation,
+        lease_owner="launcher",
+        state="project_linked",
+        now=now + timedelta(milliseconds=750),
+    )
+    snapshot = ledger.advance_project_lifecycle(
+        RUN_ID,
+        expected_generation=snapshot.generation,
+        lease_owner="launcher",
+        state="api_enablement",
+        now=now + timedelta(milliseconds=800),
+    )
+    for index, service in enumerate(run["scope"]["enabled_api_services"]):
+        record_create(
+            "gcp.serviceusage.service",
+            f"{project_resource}/services/{service}",
+            {},
+            now + timedelta(milliseconds=850 + index * 5),
+        )
+    snapshot = ledger.advance_project_lifecycle(
+        RUN_ID,
+        expected_generation=snapshot.generation,
+        lease_owner="launcher",
+        state="provisioning",
+        now=now + timedelta(seconds=1),
+    )
+    return snapshot
+
+
+def matching_intent(snapshot, resource_type, resource_id, *, action="create"):
+    return next(
+        event for event in reversed(snapshot.manifest["operations"])
+        if event["kind"] == "intent"
+        and event["action"] == action
+        and event["resource_type"] == resource_type
+        and event["resource_id"] == resource_id
+    )
+
+
 class FakeProvider:
     """Exact-ID fake provider that can lose a committed create response."""
 
@@ -226,43 +346,32 @@ class RunLedgerTests(unittest.TestCase):
 
     def lease_in_provisioning(self):
         snapshot = self.create_and_lease()
-        states = [
-            "prepared", "project_create_requested", "project_created",
-            "billing_link_requested", "project_linked", "api_enablement",
-            "provisioning",
+        snapshot = advance_ledger_to_provisioning(self.ledger, snapshot, self.now)
+        candidate = deepcopy(snapshot.manifest)
+        candidate["resources"] = [
+            {
+                "type": "gcp.compute.network",
+                "id": (
+                    f"projects/{self.intent['scope']['project_id']}"
+                    f"/global/networks/{RUN_ID}-network"
+                ),
+                "ownership_proof": "run_name",
+                "status": "expected",
+                "delete_attempts": 0,
+            }
         ]
-        for index, state in enumerate(states, start=1):
-            candidate = deepcopy(snapshot.manifest)
-            candidate["state"] = state
-            if state == "prepared":
-                snapshot = self.mark_controls_present(snapshot)
-                continue
-            if state == "provisioning":
-                candidate["resources"] = [
-                    {
-                        "type": "gcp.compute.network",
-                        "id": (
-                            f"projects/{self.intent['scope']['project_id']}"
-                            f"/global/networks/{RUN_ID}-network"
-                        ),
-                        "ownership_proof": "run_name",
-                        "status": "expected",
-                        "delete_attempts": 0,
-                    }
-                ]
-            snapshot = self.ledger.replace(
-                RUN_ID,
-                expected_generation=snapshot.generation,
-                lease_owner="launcher",
-                manifest=candidate,
-                now=self.now + timedelta(seconds=index + 1),
-            )
-        return snapshot
+        return self.ledger.replace(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            lease_owner="launcher",
+            manifest=candidate,
+            now=self.now + timedelta(seconds=2),
+        )
 
     def lease_in_auditing(self):
         snapshot = self.lease_in_provisioning()
         for index, state in enumerate(
-            ["ready", "teardown_requested", "cleaning", "auditing"], start=20
+            ["ready", "teardown_requested", "cleaning", "auditing"], start=10
         ):
             if state == "auditing":
                 resource_id = snapshot.manifest["resources"][0]["id"]
@@ -280,6 +389,8 @@ class RunLedgerTests(unittest.TestCase):
                 operation = next(
                     event for event in intent_snapshot.manifest["operations"]
                     if event["kind"] == "intent"
+                    and event["action"] == "delete"
+                    and event["resource_id"] == resource_id
                 )
                 snapshot = self.ledger.record_operation_result(
                     RUN_ID,
@@ -438,8 +549,11 @@ class RunLedgerTests(unittest.TestCase):
             request_sha256=request_sha,
             now=self.now + timedelta(seconds=8),
         )
-        self.assertEqual(recorded.manifest["operations"][0]["operation_id"], op_id)
-        self.assertEqual(recorded.manifest["operations"][0]["kind"], "intent")
+        intent_event = matching_intent(
+            recorded, "gcp.compute.network", resource_id
+        )
+        self.assertEqual(intent_event["operation_id"], op_id)
+        self.assertEqual(intent_event["kind"], "intent")
         for bad_attempt, bad_fingerprint in ((True, request_sha), (1, "not-a-digest")):
             with self.subTest(attempt=bad_attempt, fingerprint=bad_fingerprint), self.assertRaises(ContractError):
                 self.ledger.record_operation_intent(
@@ -468,7 +582,9 @@ class RunLedgerTests(unittest.TestCase):
             now=self.now + timedelta(seconds=8),
         )
         self.assertEqual(replayed, recorded)
-        self.assertEqual(len(replayed.manifest["operations"]), 1)
+        self.assertEqual(
+            replayed.manifest["operations"], recorded.manifest["operations"]
+        )
 
         resolved = self.ledger.record_operation_result(
             RUN_ID,
@@ -490,7 +606,10 @@ class RunLedgerTests(unittest.TestCase):
             now=self.now + timedelta(seconds=9),
         )
         self.assertEqual(retried_result, resolved)
-        self.assertEqual(len(retried_result.manifest["operations"]), 2)
+        self.assertEqual(
+            len(retried_result.manifest["operations"]),
+            len(recorded.manifest["operations"]) + 1,
+        )
 
         next_attempt = self.ledger.record_operation_intent(
             RUN_ID,
@@ -582,7 +701,9 @@ class RunLedgerTests(unittest.TestCase):
             RUN_ID,
             expected_generation=replayed.generation,
             lease_owner="launcher",
-            operation_id_value=pending.manifest["operations"][0]["operation_id"],
+            operation_id_value=matching_intent(
+                pending, "gcp.compute.network", resource_id
+            )["operation_id"],
             outcome="reconciled_present",
             response_sha256="d" * 64,
             now=self.now + timedelta(seconds=12),
@@ -614,6 +735,9 @@ class RunLedgerTests(unittest.TestCase):
             request_sha256=request_sha,
             now=self.now + timedelta(seconds=8),
         )
+        intent_event = matching_intent(
+            recorded, "gcp.compute.network", resource_id
+        )
         provider_operation_name = (
             f"projects/{self.intent['scope']['project_id']}/regions/"
             "europe-west2/operations/op-123"
@@ -622,7 +746,9 @@ class RunLedgerTests(unittest.TestCase):
             RUN_ID,
             expected_generation=recorded.generation,
             lease_owner="launcher",
-            operation_id_value=recorded.manifest["operations"][0]["operation_id"],
+            operation_id_value=matching_intent(
+                recorded, "gcp.compute.network", resource_id
+            )["operation_id"],
             provider_operation_name=provider_operation_name,
             response_sha256="d" * 64,
             now=self.now + timedelta(seconds=9),
@@ -631,7 +757,9 @@ class RunLedgerTests(unittest.TestCase):
             RUN_ID,
             expected_generation=recorded.generation,
             lease_owner="launcher",
-            operation_id_value=recorded.manifest["operations"][0]["operation_id"],
+            operation_id_value=matching_intent(
+                recorded, "gcp.compute.network", resource_id
+            )["operation_id"],
             provider_operation_name=provider_operation_name,
             response_sha256="d" * 64,
             now=self.now + timedelta(seconds=9),
@@ -642,7 +770,9 @@ class RunLedgerTests(unittest.TestCase):
                 RUN_ID,
                 expected_generation=progress.generation,
                 lease_owner="launcher",
-                operation_id_value=recorded.manifest["operations"][0]["operation_id"],
+                operation_id_value=matching_intent(
+                    recorded, "gcp.compute.network", resource_id
+                )["operation_id"],
                 provider_operation_name=provider_operation_name + "-changed",
                 response_sha256="e" * 64,
                 now=self.now + timedelta(seconds=10),
@@ -651,14 +781,19 @@ class RunLedgerTests(unittest.TestCase):
             RUN_ID,
             expected_generation=progress.generation,
             lease_owner="launcher",
-            operation_id_value=recorded.manifest["operations"][0]["operation_id"],
+            operation_id_value=matching_intent(
+                recorded, "gcp.compute.network", resource_id
+            )["operation_id"],
             outcome="succeeded",
             provider_operation_name=provider_operation_name,
             response_sha256="f" * 64,
             now=self.now + timedelta(seconds=10),
         )
         self.assertEqual(
-            [event["kind"] for event in complete.manifest["operations"]],
+            [
+                event["kind"] for event in complete.manifest["operations"]
+                if event.get("operation_id") == intent_event["operation_id"]
+            ],
             ["intent", "progress", "result"],
         )
 
@@ -730,7 +865,9 @@ class RunLedgerTests(unittest.TestCase):
             RUN_ID,
             expected_generation=takeover.generation,
             lease_owner="reaper",
-            operation_id_value=pending.manifest["operations"][0]["operation_id"],
+            operation_id_value=matching_intent(
+                pending, "gcp.compute.network", resource_id
+            )["operation_id"],
             outcome="reconciled_present",
             response_sha256="e" * 64,
             now=self.now + timedelta(minutes=3, seconds=2),
@@ -738,6 +875,38 @@ class RunLedgerTests(unittest.TestCase):
         self.assertEqual(completed.manifest["operations"][-1]["outcome"], "reconciled_present")
         self.assertEqual(provider.create_calls, 1)
         self.assertEqual(provider.lookups, [resource_id])
+
+    def test_project_lifecycle_phase_cannot_be_changed_without_operation_evidence(self):
+        snapshot = self.mark_controls_present(self.create_and_lease())
+        candidate = deepcopy(snapshot.manifest)
+        candidate["state"] = "project_create_requested"
+        with self.assertRaisesRegex(LedgerConflict, "transition operation"):
+            self.ledger.replace(
+                RUN_ID,
+                expected_generation=snapshot.generation,
+                lease_owner="launcher",
+                manifest=candidate,
+                now=self.now + timedelta(seconds=1),
+            )
+
+        requested = self.ledger.advance_project_lifecycle(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            lease_owner="launcher",
+            state="project_create_requested",
+            now=self.now + timedelta(seconds=1),
+        )
+        with self.assertRaisesRegex(LedgerConflict, "project-create result"):
+            self.ledger.advance_project_lifecycle(
+                RUN_ID,
+                expected_generation=requested.generation,
+                lease_owner="launcher",
+                state="project_created",
+                now=self.now + timedelta(seconds=2),
+            )
+        self.assertEqual(
+            self.ledger.read(RUN_ID).manifest["state"], "project_create_requested"
+        )
 
     def test_controls_cannot_be_marked_present_without_verifier_receipt(self):
         original = self.create_and_lease()

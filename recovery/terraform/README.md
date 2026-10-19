@@ -65,6 +65,18 @@ local state.
    independent closure audit, and billing reconciliation. The Job has deletion
    protection; control reclamation is a separate reviewed post-audit action.
 
+The source-level activation runner is `scripts/gcp_project_bootstrap.py`. It
+requires the run's `prepared` receipt, the exact project ID and registered
+intent digest as confirmations, a fresh injected finance preflight, and an
+absent-project read immediately before the create phase. It journals each
+project, billing, and API operation before the provider call, resumes pending
+operations by exact ID, and advances ledger state only after successful
+operation receipts. The ledger rejects direct edits that skip those operation
+gates. The runner has mocked-provider qualification only; no credentialed CLI,
+concrete budget/credit verifier, or live project activation is qualified yet.
+Do not use it for a live run until the concrete preflight and user-authorized
+activation path have been completed and reviewed.
+
 The run-project provider alias has no managed resources while the retirement
 IAM flag is false. No workload IAM, project creation, billing attachment,
 control reclamation, or state-bucket provisioning is part of this root. The

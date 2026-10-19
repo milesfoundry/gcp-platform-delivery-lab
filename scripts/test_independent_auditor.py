@@ -16,7 +16,11 @@ from independent_auditor import (
 from run_contract import cleanup_plan
 from run_ledger import RunLedger
 from test_run_contract import PROJECT, RUN_ID, attach_control_receipt, intent, resource
-from test_run_ledger import FakeObjectStore, current_intent, prepare_control_bootstrap
+from test_run_ledger import (
+    FakeObjectStore,
+    advance_ledger_to_provisioning,
+    current_intent,
+)
 
 
 def report(
@@ -82,16 +86,12 @@ class IndependentAuditorTests(unittest.TestCase):
         snapshot = ledger.acquire_lease(
             RUN_ID, expected_generation=snapshot.generation, owner="launcher", now=now
         )
-        for index, state in enumerate([
-            "prepared", "project_create_requested", "project_created",
-            "billing_link_requested", "project_linked", "api_enablement",
-            "provisioning", "ready", "teardown_requested", "cleaning",
-        ], start=1):
+        snapshot = advance_ledger_to_provisioning(ledger, snapshot, now)
+        for index, state in enumerate(
+            ["ready", "teardown_requested", "cleaning"], start=10
+        ):
             candidate = deepcopy(snapshot.manifest)
             candidate["state"] = state
-            if state == "prepared":
-                snapshot = prepare_control_bootstrap(ledger, snapshot, now)
-                continue
             snapshot = ledger.replace(
                 RUN_ID,
                 expected_generation=snapshot.generation,
@@ -292,19 +292,13 @@ class IndependentAuditorTests(unittest.TestCase):
             owner="launcher",
             now=now,
         )
+        snapshot = advance_ledger_to_provisioning(ledger, snapshot, now)
         for index, state in enumerate(
-            [
-                "prepared", "project_create_requested", "project_created",
-                "billing_link_requested", "project_linked", "api_enablement",
-                "provisioning", "ready", "teardown_requested", "cleaning", "auditing",
-            ],
-            start=1,
+            ["ready", "teardown_requested", "cleaning", "auditing"],
+            start=10,
         ):
             candidate = deepcopy(snapshot.manifest)
             candidate["state"] = state
-            if state == "prepared":
-                snapshot = prepare_control_bootstrap(ledger, snapshot, now)
-                continue
             snapshot = ledger.replace(
                 RUN_ID,
                 expected_generation=snapshot.generation,

@@ -20,6 +20,7 @@ class _Snapshot:
     run_id: str
     manifest: dict
     generation: int
+    metadata: dict
 
 
 class _FakeLedger:
@@ -28,7 +29,7 @@ class _FakeLedger:
 
     def create(self, value):
         self.created.append(value)
-        return _Snapshot(value["run_id"], value, 7)
+        return _Snapshot(value["run_id"], value, 7, {"intent_sha256": "a" * 64})
 
 
 class _LossyObjectStore:
@@ -113,6 +114,7 @@ class RegisterGCPRunTests(unittest.TestCase):
             f"runs/{self.document['run_id']}/manifest.json",
         )
         self.assertEqual(receipt["generation"], 7)
+        self.assertEqual(receipt["intent_sha256"], "a" * 64)
         self.assertNotIn("credentials", receipt)
 
     def test_retry_after_lost_gcs_create_response_reuses_exact_manifest(self):

@@ -133,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             "run_id": snapshot.run_id,
             "state": snapshot.manifest["state"],
             "ledger_object": name,
+            "intent_sha256": snapshot.metadata["intent_sha256"],
             "generation": snapshot.generation,
             "deadline_at": snapshot.manifest["deadline_at"],
         }

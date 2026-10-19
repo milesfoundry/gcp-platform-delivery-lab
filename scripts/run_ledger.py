@@ -59,6 +59,7 @@ EVENT_TYPES = frozenset(
         "inventory_discovered",
         "recovery_controls_verified",
         "audit_receipt_recorded",
+        "project_lifecycle_state_changed",
     }
 )
 
@@ -630,6 +631,16 @@ class RunLedger:
         if _parse_time(lease["expires_at"], "lease.expires_at") <= at:
             raise LedgerConflict("expired lease cannot mutate the manifest")
         if candidate["state"] != current.manifest["state"]:
+            if candidate["state"] in {
+                "project_create_requested", "project_created",
+                "billing_link_requested", "project_linked", "api_enablement",
+                "provisioning",
+            }:
+                self._validate_project_lifecycle_transition(
+                    candidate,
+                    lease_owner=lease_owner,
+                    event_type=event_type,
+                )
             try:
                 next_state(current.manifest["state"], candidate["state"])
             except ContractError as exc:
@@ -647,6 +658,101 @@ class RunLedger:
             ):
                 return latest
             raise
+
+    @staticmethod
+    def _validate_project_lifecycle_transition(
+        candidate: dict,
+        *,
+        lease_owner: str,
+        event_type: str,
+    ) -> None:
+        """Require durable provider results before advancing project setup."""
+        if lease_owner != "launcher" or event_type != "project_lifecycle_state_changed":
+            raise LedgerConflict(
+                "project lifecycle transitions require the launcher transition operation"
+            )
+
+        results = {
+            event["operation_id"]: event
+            for event in candidate["operations"]
+            if event["kind"] == "result"
+        }
+
+        def operation_succeeded(resource_type: str, resource_id: str, phase: str) -> bool:
+            return any(
+                event["kind"] == "intent"
+                and event["action"] == "create"
+                and event["resource_type"] == resource_type
+                and event["resource_id"] == resource_id
+                and event["phase"] == phase
+                and results.get(event["operation_id"], {}).get("outcome")
+                in {"succeeded", "reconciled_present"}
+                for event in candidate["operations"]
+            )
+
+        project_id = candidate["scope"]["project_id"]
+        project_resource = f"projects/{project_id}"
+        target = candidate["state"]
+        controls_ready = (
+            bool(candidate.get("recovery_control_receipts"))
+            and all(control["status"] == "present" for control in candidate["controls"])
+        )
+        project_ready = operation_succeeded(
+            "gcp.resourcemanager.project",
+            project_resource,
+            "project_create_requested",
+        )
+        billing_ready = operation_succeeded(
+            "gcp.billing.project_billing_info",
+            project_resource,
+            "billing_link_requested",
+        )
+
+        if target == "project_create_requested" and not controls_ready:
+            raise LedgerConflict("project creation requires verified recovery controls")
+        if target in {"project_created", "billing_link_requested"} and not project_ready:
+            raise LedgerConflict(
+                "project lifecycle requires a successful exact project-create result"
+            )
+        if target in {"project_linked", "api_enablement", "provisioning"} and not billing_ready:
+            raise LedgerConflict(
+                "project lifecycle requires a successful exact billing-link result"
+            )
+        if target == "provisioning":
+            missing = [
+                service for service in candidate["scope"]["enabled_api_services"]
+                if not operation_succeeded(
+                    "gcp.serviceusage.service",
+                    f"projects/{project_id}/services/{service}",
+                    "api_enablement",
+                )
+            ]
+            if missing:
+                raise LedgerConflict(
+                    "provisioning requires successful enablement of every declared API"
+                )
+
+    def advance_project_lifecycle(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        lease_owner: str,
+        state: str,
+        now: datetime | None = None,
+    ) -> LedgerSnapshot:
+        """Advance one evidence-backed project setup phase under launcher lease."""
+        current = self.read(run_id)
+        candidate = json.loads(json.dumps(current.manifest))
+        candidate["state"] = state
+        return self.replace(
+            run_id,
+            expected_generation=expected_generation,
+            lease_owner=lease_owner,
+            manifest=candidate,
+            event_type="project_lifecycle_state_changed",
+            now=now,
+        )
 
     def record_recovery_control_verification(
         self,

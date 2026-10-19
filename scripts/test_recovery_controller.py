@@ -11,7 +11,11 @@ from recovery_controller import ProviderReceipt, RecoveryController, request_fin
 from independent_auditor import register_discovered_workload_resources
 from test_independent_auditor import report as normalized_report
 from test_run_contract import RUN_ID
-from test_run_ledger import FakeObjectStore, current_intent, prepare_control_bootstrap
+from test_run_ledger import (
+    FakeObjectStore,
+    advance_ledger_to_provisioning,
+    current_intent,
+)
 
 
 class FakeOperationProvider:
@@ -89,33 +93,25 @@ class RecoveryControllerTests(unittest.TestCase):
         snapshot = self.ledger.acquire_lease(
             RUN_ID, expected_generation=created.generation, owner="launcher", now=self.now
         )
-        states = [
-            "prepared", "project_create_requested", "project_created",
-            "billing_link_requested", "project_linked", "api_enablement", "provisioning",
+        snapshot = advance_ledger_to_provisioning(self.ledger, snapshot, self.now)
+        candidate = deepcopy(snapshot.manifest)
+        candidate["resources"] = [
+            {
+                "type": "gcp.compute.network",
+                "id": resource_id,
+                "ownership_proof": "run_name",
+                "status": "expected",
+                "delete_attempts": 0,
+            }
         ]
-        for index, state in enumerate(states, start=1):
-            candidate = deepcopy(snapshot.manifest)
-            candidate["state"] = state
-            if state == "prepared":
-                snapshot = prepare_control_bootstrap(self.ledger, snapshot, self.now)
-                continue
-            if state == "provisioning":
-                candidate["resources"] = [
-                    {
-                        "type": "gcp.compute.network",
-                        "id": resource_id,
-                        "ownership_proof": "run_name",
-                        "status": "expected",
-                        "delete_attempts": 0,
-                    }
-                ]
-            snapshot = self.ledger.replace(
-                RUN_ID,
-                expected_generation=snapshot.generation,
-                lease_owner="launcher",
-                manifest=candidate,
-                now=self.now + timedelta(seconds=index + 1),
-            )
+        snapshot = self.ledger.replace(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            lease_owner="launcher",
+            manifest=candidate,
+            now=self.now + timedelta(seconds=10),
+        )
+        self.controller.clock = lambda: self.now + timedelta(seconds=20)
         self.resource_id = resource_id
 
     def execute(self, *, attempt=1):
@@ -133,17 +129,28 @@ class RecoveryControllerTests(unittest.TestCase):
         submitted = self.execute()
         self.assertEqual(submitted.state, "running")
         self.assertEqual(
-            [event["kind"] for event in submitted.snapshot.manifest["operations"]],
+            [
+                event["kind"] for event in submitted.snapshot.manifest["operations"]
+                if event.get("operation_id") == submitted.operation_id
+            ],
             ["intent", "progress"],
         )
-        self.assertNotIn("request", submitted.snapshot.manifest["operations"][0])
+        operation = next(
+            event for event in submitted.snapshot.manifest["operations"]
+            if event.get("operation_id") == submitted.operation_id
+            and event["kind"] == "intent"
+        )
+        self.assertNotIn("request", operation)
 
         completed = self.execute()
         self.assertEqual(completed.state, "succeeded")
         self.assertEqual(len(self.provider.submit_calls), 1)
         self.assertEqual(self.provider.polls, [FakeOperationProvider.operation_name()])
         self.assertEqual(
-            [event["kind"] for event in completed.snapshot.manifest["operations"]],
+            [
+                event["kind"] for event in completed.snapshot.manifest["operations"]
+                if event.get("operation_id") == completed.operation_id
+            ],
             ["intent", "progress", "result"],
         )
 
@@ -176,6 +183,7 @@ class RecoveryControllerTests(unittest.TestCase):
         self.assertFalse(
             any(
                 event["kind"] == "result"
+                and event["operation_id"] == unresolved.operation_id
                 for event in unresolved.snapshot.manifest["operations"]
             )
         )
