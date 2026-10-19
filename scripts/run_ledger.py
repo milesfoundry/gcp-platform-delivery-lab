@@ -38,6 +38,7 @@ EVENT_TYPES = frozenset(
         "lease_heartbeat",
         "lease_released",
         "operation_intent_recorded",
+        "operation_progress_recorded",
         "operation_result_recorded",
     }
 )
@@ -581,6 +582,78 @@ class RunLedger:
             lease_owner=lease_owner,
             manifest=candidate,
             event_type="operation_intent_recorded",
+            now=at,
+        )
+
+    def record_operation_progress(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        lease_owner: str,
+        operation_id_value: str,
+        provider_operation_name: str,
+        response_sha256: str,
+        now: datetime | None = None,
+    ) -> LedgerSnapshot:
+        """Persist a provider's accepted long-running operation receipt."""
+        self._validate_generation(expected_generation)
+        if not isinstance(response_sha256, str) or re.fullmatch(
+            r"[0-9a-f]{64}", response_sha256
+        ) is None:
+            raise ContractError("provider progress fingerprint must be a SHA-256 hex digest")
+        at = now or self._clock()
+        current = self.read(run_id)
+        self._require_active_lease(current, lease_owner, at)
+        intent_ids = {
+            event["operation_id"]
+            for event in current.manifest["operations"]
+            if event["kind"] == "intent"
+        }
+        if operation_id_value not in intent_ids:
+            raise LedgerConflict("provider progress has no matching durable intent")
+        matching_progress = [
+            event
+            for event in current.manifest["operations"]
+            if event["kind"] == "progress"
+            and event["operation_id"] == operation_id_value
+        ]
+        if matching_progress:
+            if any(
+                event["provider_operation_name"] != provider_operation_name
+                for event in matching_progress
+            ):
+                raise LedgerConflict("provider operation name cannot change during reconciliation")
+            if any(
+                event["response_sha256"] == response_sha256
+                for event in matching_progress
+            ):
+                return current
+        if any(
+            event["kind"] == "result" and event["operation_id"] == operation_id_value
+            for event in current.manifest["operations"]
+        ):
+            raise LedgerConflict("completed provider operation cannot accept more progress")
+
+        if current.generation != expected_generation:
+            raise GenerationConflict("manifest generation is stale")
+
+        progress = {
+            "kind": "progress",
+            "operation_id": operation_id_value,
+            "provider_operation_name": provider_operation_name,
+            "response_sha256": response_sha256,
+            "at": _format_time(at),
+            "sequence": len(current.manifest["operations"]) + 1,
+        }
+        candidate = json.loads(json.dumps(current.manifest))
+        candidate["operations"].append(progress)
+        return self.replace(
+            run_id,
+            expected_generation=expected_generation,
+            lease_owner=lease_owner,
+            manifest=candidate,
+            event_type="operation_progress_recorded",
             now=at,
         )
 

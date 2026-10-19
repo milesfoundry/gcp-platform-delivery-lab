@@ -406,7 +406,10 @@ timestamp before the provider call. Its result records a bounded outcome,
 optional provider operation name and SHA-256 of the normalized response summary;
 raw provider responses are never stored. A pending intent cannot be followed by
 another attempt for the same target. Repeated intent/result writes reconcile the
-same deterministic record after a lost ledger response. Fake-provider tests
+same deterministic record after a lost ledger response. A `progress` event
+records the stable provider operation name and a normalized response fingerprint
+when GCP accepts an asynchronous request; it leaves the intent unresolved for
+later polling. Only a terminal provider result closes the intent. Fake-provider tests
 model a create that commits while its response is lost, lease takeover and
 read-only lookup by the exact intended ID; they assert no duplicate create.
 The original operation ID and authorization phase remain addressable if a
@@ -548,15 +551,17 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
 1. `scripts/run_contract.py` and its fixtures/tests: schema v2 now separates
    recovery/workload projects and reaper identities, predeclares the per-run
    controls, models project/billing phases and audits controls separately from
-   workload IDs. It still needs exact state-backup identifiers and restore-proof
-   fields. Reject cross-project IDs, ambiguous create/link results and
+   workload IDs. The contract carries distinct state/backup bucket identifiers,
+   generation references and append-only restore-proof fields. Reject
+   cross-project IDs, ambiguous create/link results and
    unauthorized project transitions. `scripts/run_contract_cli.py` emits only
    exact-ID dry-run plans. `scripts/run_ledger.py` implements create-only and
    generation-conditional exact-path manifest storage, bounded event history,
    and CAS leases with a fake-store suite. The manifest now records exact
    backend/backup paths, append-only current/previous restore proof metadata,
-   and durable provider request/result intents with deterministic IDs. Fake
-   create-response-loss takeover is covered. Bucket isolation, backup
+   and durable phase-bound provider intents with deterministic IDs, progress
+   receipts for accepted long-running operations, and terminal results. Fake
+   create-response-loss takeover across a phase change is covered. Bucket isolation, backup
    administration, versioning/retention, real provider reconciliation, adapters
    for the full resource matrix and actual restore remain unqualified.
 2. `bootstrap/terraform/`: now owns only persistent bootstrap-project APIs,

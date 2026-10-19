@@ -590,9 +590,47 @@ def _validate_operations(
             at = _timestamp(event.get("at"), f"operations[{index - 1}].at")
             if previous_at is not None and at < previous_at:
                 raise ContractError("provider operation timestamps must be monotonic")
-            intents[op_id] = {"action": action, "at": at, "target": target}
+            intents[op_id] = {
+                "action": action,
+                "at": at,
+                "target": target,
+                "provider_operation_name": None,
+                "progress_count": 0,
+            }
             latest_attempt[target] = attempt
             pending_target.add(target)
+            previous_at = at
+        elif kind == "progress":
+            _only_keys(
+                event,
+                {
+                    "sequence", "kind", "operation_id", "provider_operation_name",
+                    "response_sha256", "at",
+                },
+                f"operations[{index - 1}]",
+            )
+            op_id = event.get("operation_id")
+            if not isinstance(op_id, str) or op_id not in intents:
+                raise ContractError("provider progress must refer to a prior exact operation intent")
+            intent = intents[op_id]
+            if intent.get("resolved"):
+                raise ContractError("completed provider operation cannot accept more progress")
+            provider_name = event.get("provider_operation_name")
+            if not isinstance(provider_name, str) or not OPERATION_NAME.fullmatch(provider_name):
+                raise ContractError("provider progress operation name is malformed")
+            if (
+                intent["provider_operation_name"] is not None
+                and intent["provider_operation_name"] != provider_name
+            ):
+                raise ContractError("provider operation name cannot change during reconciliation")
+            response_sha256 = event.get("response_sha256")
+            if not isinstance(response_sha256, str) or not SHA256.fullmatch(response_sha256):
+                raise ContractError("provider progress summary must be SHA-256 fingerprinted")
+            at = _timestamp(event.get("at"), f"operations[{index - 1}].at")
+            if at < intent["at"] or (previous_at is not None and at < previous_at):
+                raise ContractError("provider progress timestamp must follow its intent monotonically")
+            intent["provider_operation_name"] = provider_name
+            intent["progress_count"] += 1
             previous_at = at
         elif kind == "result":
             _only_keys(
@@ -625,6 +663,10 @@ def _validate_operations(
                 or not OPERATION_NAME.fullmatch(provider_name)
             ):
                 raise ContractError("provider operation name is malformed")
+            if intent["provider_operation_name"] is not None and (
+                provider_name != intent["provider_operation_name"]
+            ):
+                raise ContractError("provider result must retain its journaled operation name")
             response_sha256 = event.get("response_sha256")
             if not isinstance(response_sha256, str) or not SHA256.fullmatch(response_sha256):
                 raise ContractError("provider response summary must be SHA-256 fingerprinted")

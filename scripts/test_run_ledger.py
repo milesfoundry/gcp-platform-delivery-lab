@@ -351,6 +351,69 @@ class RunLedgerTests(unittest.TestCase):
                 now=self.now + timedelta(seconds=9),
             )
 
+    def test_long_running_operation_receipt_is_append_only_and_idempotent(self):
+        leased = self.lease_in_provisioning()
+        resource_id = f"projects/{self.intent['scope']['project_id']}/global/networks/{RUN_ID}-network"
+        request_sha = "c" * 64
+        recorded = self.ledger.record_operation_intent(
+            RUN_ID,
+            expected_generation=leased.generation,
+            lease_owner="launcher",
+            attempt=1,
+            action="create",
+            resource_type="gcp.compute.network",
+            resource_id=resource_id,
+            request_sha256=request_sha,
+            now=self.now + timedelta(seconds=8),
+        )
+        provider_operation_name = (
+            f"projects/{self.intent['scope']['project_id']}/regions/"
+            "europe-west2/operations/op-123"
+        )
+        progress = self.ledger.record_operation_progress(
+            RUN_ID,
+            expected_generation=recorded.generation,
+            lease_owner="launcher",
+            operation_id_value=recorded.manifest["operations"][0]["operation_id"],
+            provider_operation_name=provider_operation_name,
+            response_sha256="d" * 64,
+            now=self.now + timedelta(seconds=9),
+        )
+        replayed = self.ledger.record_operation_progress(
+            RUN_ID,
+            expected_generation=recorded.generation,
+            lease_owner="launcher",
+            operation_id_value=recorded.manifest["operations"][0]["operation_id"],
+            provider_operation_name=provider_operation_name,
+            response_sha256="d" * 64,
+            now=self.now + timedelta(seconds=9),
+        )
+        self.assertEqual(replayed, progress)
+        with self.assertRaises(LedgerConflict):
+            self.ledger.record_operation_progress(
+                RUN_ID,
+                expected_generation=progress.generation,
+                lease_owner="launcher",
+                operation_id_value=recorded.manifest["operations"][0]["operation_id"],
+                provider_operation_name=provider_operation_name + "-changed",
+                response_sha256="e" * 64,
+                now=self.now + timedelta(seconds=10),
+            )
+        complete = self.ledger.record_operation_result(
+            RUN_ID,
+            expected_generation=progress.generation,
+            lease_owner="launcher",
+            operation_id_value=recorded.manifest["operations"][0]["operation_id"],
+            outcome="succeeded",
+            provider_operation_name=provider_operation_name,
+            response_sha256="f" * 64,
+            now=self.now + timedelta(seconds=10),
+        )
+        self.assertEqual(
+            [event["kind"] for event in complete.manifest["operations"]],
+            ["intent", "progress", "result"],
+        )
+
     def test_takeover_reconciles_lost_create_response_by_exact_id(self):
         provider = FakeProvider()
         leased = self.lease_in_provisioning()

@@ -187,15 +187,28 @@ class RunIntentTests(unittest.TestCase):
             },
             {
                 "sequence": 2,
+                "kind": "progress",
+                "operation_id": op_id,
+                "provider_operation_name": f"projects/{PROJECT}/regions/europe-west2/operations/op-123",
+                "response_sha256": "e" * 64,
+                "at": "2026-10-18T12:01:30Z",
+            },
+            {
+                "sequence": 3,
                 "kind": "result",
                 "operation_id": op_id,
                 "outcome": "reconciled_present",
-                "provider_operation_name": None,
+                "provider_operation_name": f"projects/{PROJECT}/regions/europe-west2/operations/op-123",
                 "response_sha256": "d" * 64,
                 "at": "2026-10-18T12:02:00Z",
             },
         ]
         self.assertEqual(validate_manifest(candidate)["run_id"], RUN_ID)
+
+        changed_operation_name = deepcopy(candidate)
+        changed_operation_name["operations"][1]["provider_operation_name"] += "-changed"
+        with self.assertRaises(ContractError):
+            validate_manifest(changed_operation_name)
 
         candidate["operations"][0]["resource_id"] = (
             "projects/other-project/global/networks/" + RUN_ID + "-network"

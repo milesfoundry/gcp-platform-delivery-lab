@@ -13,8 +13,10 @@ Cloud Run reaper, provider adapter, cleanup controller, janitor or cloud
 qualification. The manifest records deterministic provider-operation intents
 and results, including the lifecycle phase that authorized each intent; fake
 provider tests cover a committed create with a lost response and exact-ID
-reconciliation after lease takeover. No cloud resource creation is authorized
-by these files.
+reconciliation after lease takeover. Append-only progress receipts retain the
+provider operation name for accepted asynchronous requests without marking them
+complete; only a terminal result resolves an intent. No cloud resource creation
+is authorized by these files.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources
