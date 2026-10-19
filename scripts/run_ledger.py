@@ -18,13 +18,14 @@ from run_contract import (
     MAX_RUN_LIFETIME,
     RUN_ID,
     next_state,
+    operation_id,
     validate_intent,
     validate_manifest,
 )
 
 
 LEDGER_SCHEMA = "portfolio.gcp-ledger.v1"
-MAX_EVENTS = 256
+MAX_EVENTS = 1024
 MAX_LEASE = timedelta(minutes=5)
 MIN_LEASE = timedelta(seconds=15)
 OWNER = re.compile(r"^(?:launcher|reaper|operator:[a-z0-9._-]{1,64})$")
@@ -36,6 +37,8 @@ EVENT_TYPES = frozenset(
         "lease_reclaimed",
         "lease_heartbeat",
         "lease_released",
+        "operation_intent_recorded",
+        "operation_result_recorded",
     }
 )
 
@@ -162,7 +165,7 @@ def _validate_envelope(value: object) -> tuple[dict, dict]:
     if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
         raise LedgerError("event_sequence must be a positive integer")
     if not isinstance(events, list) or not events or len(events) > MAX_EVENTS:
-        raise LedgerError("events must contain between one and 256 records")
+        raise LedgerError(f"events must contain between one and {MAX_EVENTS} records")
     if sequence != len(events):
         raise LedgerError("event_sequence must equal the retained event count")
     previous_event_time = None
@@ -251,6 +254,22 @@ class RunLedger:
         if manifest["run_id"] != run_id:
             raise LedgerError("manifest run_id does not match its exact object path")
         return LedgerSnapshot(run_id, manifest, generation, metadata)
+
+    def assert_active_lease(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        owner: str,
+        now: datetime | None = None,
+    ) -> LedgerSnapshot:
+        """Re-read the exact record and confirm its lease immediately before a call."""
+        self._validate_generation(expected_generation)
+        current = self.read(run_id)
+        self._require_active_lease(current, owner, now or self._clock())
+        if current.generation != expected_generation:
+            raise GenerationConflict("manifest generation is stale")
+        return current
 
     def _replace_envelope(
         self, run_id: str, current: LedgerSnapshot, envelope: dict
@@ -442,6 +461,10 @@ class RunLedger:
         new_proofs = candidate["terraform_state"]["restore_proofs"]
         if new_proofs[:len(old_proofs)] != old_proofs:
             raise LedgerConflict("Terraform state restore proof history is append-only")
+        old_operations = current.manifest["operations"]
+        new_operations = candidate["operations"]
+        if new_operations[:len(old_operations)] != old_operations:
+            raise LedgerConflict("provider operation history is append-only")
         if current.generation != expected_generation:
             if (
                 candidate == current.manifest
@@ -473,6 +496,136 @@ class RunLedger:
             ):
                 return latest
             raise
+
+    def record_operation_intent(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        lease_owner: str,
+        attempt: int,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        request_sha256: str,
+        now: datetime | None = None,
+    ) -> LedgerSnapshot:
+        """Persist an exact provider request before its caller makes the request.
+
+        A repeated call with the same attempt returns the existing event. That
+        event is not permission to repeat the provider call: a pending attempt
+        must first be reconciled by exact resource ID after any interruption.
+        """
+        self._validate_generation(expected_generation)
+        at = now or self._clock()
+        current = self.read(run_id)
+        self._require_active_lease(current, lease_owner, at)
+        op_id = operation_id(
+            run_id, attempt, action, resource_type, resource_id, request_sha256
+        )
+        intent = {
+            "kind": "intent",
+            "operation_id": op_id,
+            "attempt": attempt,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "request_sha256": request_sha256,
+            "at": _format_time(at),
+        }
+        for event in current.manifest["operations"]:
+            if event["kind"] == "intent" and event["operation_id"] == op_id:
+                if {
+                    key: value for key, value in event.items()
+                    if key not in {"sequence", "at"}
+                } != {key: value for key, value in intent.items() if key != "at"}:
+                    raise LedgerConflict("operation ID already has a different intent")
+                return current
+
+        if current.generation != expected_generation:
+            raise GenerationConflict("manifest generation is stale")
+
+        candidate = json.loads(json.dumps(current.manifest))
+        intent["sequence"] = len(candidate["operations"]) + 1
+        candidate["operations"].append(intent)
+        return self.replace(
+            run_id,
+            expected_generation=expected_generation,
+            lease_owner=lease_owner,
+            manifest=candidate,
+            event_type="operation_intent_recorded",
+            now=at,
+        )
+
+    def record_operation_result(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        lease_owner: str,
+        operation_id_value: str,
+        outcome: str,
+        response_sha256: str,
+        provider_operation_name: str | None = None,
+        now: datetime | None = None,
+    ) -> LedgerSnapshot:
+        """Persist a minimized provider outcome under the current lease."""
+        self._validate_generation(expected_generation)
+        at = now or self._clock()
+        current = self.read(run_id)
+        self._require_active_lease(current, lease_owner, at)
+        result = {
+            "kind": "result",
+            "operation_id": operation_id_value,
+            "outcome": outcome,
+            "provider_operation_name": provider_operation_name,
+            "response_sha256": response_sha256,
+            "at": _format_time(at),
+        }
+        existing_intents = {
+            event["operation_id"]
+            for event in current.manifest["operations"]
+            if event["kind"] == "intent"
+        }
+        if operation_id_value not in existing_intents:
+            raise LedgerConflict("provider result has no matching durable intent")
+        for event in current.manifest["operations"]:
+            if event["kind"] == "result" and event["operation_id"] == operation_id_value:
+                same_result = all(
+                    event.get(key) == value
+                    for key, value in result.items()
+                    if key not in {"kind", "at"}
+                )
+                if same_result:
+                    return current
+                raise LedgerConflict("provider operation already has a different result")
+
+        if current.generation != expected_generation:
+            raise GenerationConflict("manifest generation is stale")
+
+        candidate = json.loads(json.dumps(current.manifest))
+        result["sequence"] = len(candidate["operations"]) + 1
+        candidate["operations"].append(result)
+        return self.replace(
+            run_id,
+            expected_generation=expected_generation,
+            lease_owner=lease_owner,
+            manifest=candidate,
+            event_type="operation_result_recorded",
+            now=at,
+        )
+
+    @staticmethod
+    def _require_active_lease(
+        current: LedgerSnapshot,
+        lease_owner: str,
+        at: datetime,
+    ) -> None:
+        lease = current.metadata["lease"]
+        if lease["owner"] != lease_owner or lease["expires_at"] is None:
+            raise LedgerConflict("provider operation record requires the current lease owner")
+        if _parse_time(lease["expires_at"], "lease.expires_at") <= at:
+            raise LedgerConflict("expired lease cannot record a provider operation")
 
     @staticmethod
     def _validate_ttl(ttl: timedelta) -> None:

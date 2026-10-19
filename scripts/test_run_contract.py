@@ -9,6 +9,7 @@ from run_contract import (
     cleanup_plan,
     control_cleanup_plan,
     next_state,
+    operation_id,
     validate_intent,
     validate_manifest,
 )
@@ -67,6 +68,7 @@ def intent():
             },
             "restore_proofs": [],
         },
+        "operations": [],
         "state": "control_bootstrapping",
         "resources": [],
         "controls": [
@@ -161,6 +163,72 @@ class RunIntentTests(unittest.TestCase):
         candidate["terraform_state"]["restore_proofs"][0]["restored_crc32c"] = "ImIEBw=="
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
+
+    def test_provider_operation_intent_and_result_are_exact_and_deterministic(self):
+        candidate = intent()
+        resource_id = f"projects/{PROJECT}/global/networks/{RUN_ID}-network"
+        request_sha = "c" * 64
+        op_id = operation_id(
+            RUN_ID, 1, "create", "gcp.compute.network", resource_id, request_sha
+        )
+        candidate["operations"] = [
+            {
+                "sequence": 1,
+                "kind": "intent",
+                "operation_id": op_id,
+                "attempt": 1,
+                "action": "create",
+                "resource_type": "gcp.compute.network",
+                "resource_id": resource_id,
+                "request_sha256": request_sha,
+                "at": "2026-10-18T12:01:00Z",
+            },
+            {
+                "sequence": 2,
+                "kind": "result",
+                "operation_id": op_id,
+                "outcome": "reconciled_present",
+                "provider_operation_name": None,
+                "response_sha256": "d" * 64,
+                "at": "2026-10-18T12:02:00Z",
+            },
+        ]
+        self.assertEqual(validate_manifest(candidate)["run_id"], RUN_ID)
+
+        candidate["operations"][0]["resource_id"] = (
+            "projects/other-project/global/networks/" + RUN_ID + "-network"
+        )
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
+
+    def test_unresolved_or_nondeterministic_provider_intent_fails_closed(self):
+        candidate = intent()
+        resource_id = f"projects/{PROJECT}/global/networks/{RUN_ID}-network"
+        request_sha = "c" * 64
+        first = {
+            "sequence": 1,
+            "kind": "intent",
+            "operation_id": operation_id(
+                RUN_ID, 1, "create", "gcp.compute.network", resource_id, request_sha
+            ),
+            "attempt": 1,
+            "action": "create",
+            "resource_type": "gcp.compute.network",
+            "resource_id": resource_id,
+            "request_sha256": request_sha,
+            "at": "2026-10-18T12:01:00Z",
+        }
+        second = dict(first, sequence=2, attempt=2, at="2026-10-18T12:02:00Z")
+        second["operation_id"] = operation_id(
+            RUN_ID, 2, "create", "gcp.compute.network", resource_id, request_sha
+        )
+        candidate["operations"] = [first, second]
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
+
+        candidate["operations"] = [dict(first, operation_id="op-" + "0" * 64)]
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
 
     def test_deadline_must_be_future_and_within_sixty_minutes(self):
         for value in ("2026-10-18T11:59:59Z", "2026-10-18T13:00:01Z"):

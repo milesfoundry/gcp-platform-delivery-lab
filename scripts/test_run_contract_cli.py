@@ -56,6 +56,7 @@ def manifest():
             },
             "restore_proofs": [],
         },
+        "operations": [],
         "state": "cleaning",
         "controls": [
             {"type": "gcp.run.job", "id": f"projects/recovery-lab-456/locations/europe-west2/jobs/{run_id}-reaper", "ownership_proof": "run_name", "status": "expected", "delete_attempts": 0},

@@ -385,7 +385,7 @@ Each ledger object now wraps the manifest in `portfolio.gcp-ledger.v1` metadata:
 an immutable intent checksum, monotonic event history, lease owner/expiry, and
 last heartbeat. Manifest mutation requires the active lease owner and exact GCS
 generation. Leases are bounded to 15 seconds–5 minutes; expired leases can be
-reclaimed by CAS, while foreign or stale writers fail closed. The 256-event
+reclaimed by CAS, while foreign or stale writers fail closed. The 1024-event
 history is never truncated; a full record stops mutation for operator review.
 The GCS object's generation returned by the provider is the authoritative
 generation token and is carried by the in-memory ledger snapshot, not guessed
@@ -398,6 +398,23 @@ reconcile unresolved requests by exact ID after takeover. Cleanup must keep
 retrying while a create/delete outcome is unresolved. Delayed provider responses
 and runner loss during those calls remain fake-provider acceptance cases; this
 ledger slice does not yet prove them.
+
+The manifest now contains an append-only provider-operation journal. A request
+intent records a deterministic attempt ID, action, allowlisted resource type,
+exact run-scoped resource ID, SHA-256 of the canonical provider request and
+timestamp before the provider call. Its result records a bounded outcome,
+optional provider operation name and SHA-256 of the normalized response summary;
+raw provider responses are never stored. A pending intent cannot be followed by
+another attempt for the same target. Repeated intent/result writes reconcile the
+same deterministic record after a lost ledger response. Fake-provider tests
+model a create that commits while its response is lost, lease takeover and
+read-only lookup by the exact intended ID; they assert no duplicate create.
+The journal is still an adapter contract: it does not call GCP, fence an
+in-flight request or prove real provider discovery semantics.
+`RunLedger.assert_active_lease` re-reads the exact object and checks owner,
+expiry and generation for the caller immediately before it sends a provider
+request. This narrows the race window; an API request already sent cannot be
+cancelled or fenced by the ledger.
 The current Terraform roots use local backends at
 `bootstrap/terraform/.terraform/ephemeral-bootstrap.tfstate` and
 `infrastructure/lab/.terraform/ephemeral-lab.tfstate`; those are not durable and
@@ -534,9 +551,11 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    exact-ID dry-run plans. `scripts/run_ledger.py` implements create-only and
    generation-conditional exact-path manifest storage, bounded event history,
    and CAS leases with a fake-store suite. The manifest now records exact
-   backend/backup paths and append-only current/previous restore proof metadata;
-   bucket isolation, backup administration, versioning/retention and actual
-   restore remain unqualified.
+   backend/backup paths, append-only current/previous restore proof metadata,
+   and durable provider request/result intents with deterministic IDs. Fake
+   create-response-loss takeover is covered. Bucket isolation, backup
+   administration, versioning/retention, real provider reconciliation, adapters
+   for the full resource matrix and actual restore remain unqualified.
 2. `bootstrap/terraform/`: now owns only persistent bootstrap-project APIs,
    GitHub federation, cost-alert scaffolding and lifecycle alert policies; it
    no longer owns run APIs, node identity or the Config Sync Feature. Still

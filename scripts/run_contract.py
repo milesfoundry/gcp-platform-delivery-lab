@@ -7,6 +7,8 @@ authenticate, call Google Cloud APIs, persist a ledger, or delete resources.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 import math
 import re
 
@@ -84,6 +86,15 @@ DELETE_ORDER = {
     "gcp.compute.subnetwork": 90,
     "gcp.compute.network": 80,
 }
+REQUESTABLE_RESOURCE_TYPES = frozenset(DELETE_ORDER) | {
+    "gcp.resourcemanager.project",
+    "gcp.billing.project_billing_info",
+    "gcp.serviceusage.service",
+}
+OPERATION_ID = re.compile(r"^op-[0-9a-f]{64}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+OPERATION_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9/_-]{0,255}$")
+API_SERVICE = re.compile(r"^[a-z][a-z0-9-]*\.googleapis\.com$")
 
 # These recovery-project controls are inventoried before creation, but only a
 # separate post-audit operator can remove them. The Terraform state bucket and
@@ -158,6 +169,27 @@ def _only_keys(data: dict, allowed: set[str], field: str) -> None:
         raise ContractError(f"{field} contains unsupported fields: {sorted(extra)}")
 
 
+def operation_id(
+    run_id: str,
+    attempt: int,
+    action: str,
+    resource_type: str,
+    resource_id: str,
+    request_sha256: str,
+) -> str:
+    """Return the deterministic ID for one exact provider request attempt."""
+    identity = {
+        "run_id": run_id,
+        "attempt": attempt,
+        "action": action,
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "request_sha256": request_sha256,
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return "op-" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def validate_intent(
     intent: object,
     *,
@@ -171,7 +203,7 @@ def validate_intent(
         {
             "schema", "run_id", "scope", "created_at", "deadline_at", "source",
             "finance", "cleanup", "state", "resources", "controls",
-            "independent_audit", "terraform_state",
+            "independent_audit", "terraform_state", "operations",
         },
         "intent",
     )
@@ -234,6 +266,9 @@ def validate_intent(
         raise ContractError("source.image_digest must be an immutable GHCR digest")
 
     _validate_terraform_state(data.get("terraform_state"), run_id)
+    _validate_operations(
+        data.get("operations"), run_id, project_id, allow_empty=new_run
+    )
 
     finance = _mapping(data.get("finance"), "finance")
     _only_keys(
@@ -335,6 +370,8 @@ def validate_intent(
             raise ContractError("new intent must start in control_bootstrapping state")
         if data.get("resources") != []:
             raise ContractError("new intent must have an empty workload resource list")
+        if data.get("operations") != []:
+            raise ContractError("new intent must have an empty provider operation history")
     return data
 
 
@@ -414,6 +451,162 @@ def _validate_terraform_state(value: object, run_id: str) -> None:
             raise ContractError("restore proof CRC32C values must be base64-encoded checksums")
         if proof["result"] == "passed" and len(set(checksums)) != 1:
             raise ContractError("passed restore proof requires matching state, backup, and restore checksums")
+
+
+def _validate_operation_target(
+    action: str,
+    resource_type: str,
+    resource_id: str,
+    run_id: str,
+    project_id: str,
+) -> None:
+    if not isinstance(resource_type, str):
+        raise ContractError("provider operation resource type is unsupported")
+    if not isinstance(action, str):
+        raise ContractError("provider operation action must be create or delete")
+    if resource_type not in REQUESTABLE_RESOURCE_TYPES:
+        raise ContractError("provider operation resource type is unsupported")
+    if action not in {"create", "delete"}:
+        raise ContractError("provider operation action must be create or delete")
+
+    if resource_type in {
+        "gcp.resourcemanager.project",
+        "gcp.billing.project_billing_info",
+    }:
+        if resource_id != f"projects/{project_id}":
+            raise ContractError("project operation target must match the exact run project")
+        return
+
+    if resource_type == "gcp.serviceusage.service":
+        prefix = f"projects/{project_id}/services/"
+        service = resource_id[len(prefix):] if resource_id.startswith(prefix) else ""
+        if not API_SERVICE.fullmatch(service):
+            raise ContractError("API enablement target must name one service in the run project")
+        return
+
+    project_segment = re.compile(rf"(?:^|/)projects/{re.escape(project_id)}/")
+    if (
+        not RESOURCE_URI.fullmatch(resource_id)
+        or not project_segment.search(resource_id)
+    ):
+        raise ContractError("provider operation target must be a canonical URI in this run project")
+    if resource_type in REGIONAL_RESOURCE_TYPES and not any(
+        marker in resource_id
+        for marker in (f"/regions/{REGION}/", f"/locations/{REGION}/")
+    ):
+        raise ContractError("regional provider operation must stay in the approved London region")
+    if resource_type == "gcp.gkehub.feature":
+        if not resource_id.endswith("/features/configmanagement"):
+            raise ContractError("Config Sync Feature operation target is unsupported")
+    elif run_id not in resource_id:
+        raise ContractError("provider operation target must include the run ID")
+
+
+def _validate_operations(
+    value: object,
+    run_id: str,
+    project_id: str,
+    *,
+    allow_empty: bool,
+) -> None:
+    operations = value
+    if not isinstance(operations, list) or len(operations) > 1024:
+        raise ContractError("operations must contain at most 1024 append-only events")
+    if allow_empty and operations:
+        raise ContractError("new intent must start with an empty provider operation history")
+
+    intents = {}
+    latest_attempt = {}
+    pending_target = set()
+    previous_at = None
+    for index, event in enumerate(operations, start=1):
+        event = _mapping(event, f"operations[{index - 1}]")
+        sequence = event.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence != index:
+            raise ContractError("provider operation event sequence must be contiguous")
+        kind = event.get("kind")
+        if kind == "intent":
+            _only_keys(
+                event,
+                {
+                    "sequence", "kind", "operation_id", "attempt", "action",
+                    "resource_type", "resource_id", "request_sha256", "at",
+                },
+                f"operations[{index - 1}]",
+            )
+            attempt = event.get("attempt")
+            if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+                raise ContractError("provider operation attempt must be a positive integer")
+            action = event.get("action")
+            resource_type = event.get("resource_type")
+            resource_id = _string(event.get("resource_id"), "operation.resource_id")
+            request_sha256 = event.get("request_sha256")
+            if not isinstance(request_sha256, str) or not SHA256.fullmatch(request_sha256):
+                raise ContractError("operation request_sha256 must be a SHA-256 hex digest")
+            _validate_operation_target(action, resource_type, resource_id, run_id, project_id)
+            target = (action, resource_type, resource_id)
+            if target in pending_target:
+                raise ContractError("cannot issue a new provider request while the previous attempt is unresolved")
+            expected_attempt = latest_attempt.get(target, 0) + 1
+            if attempt != expected_attempt:
+                raise ContractError("provider operation attempts must be consecutive")
+            expected_id = operation_id(
+                run_id, attempt, action, resource_type, resource_id, request_sha256
+            )
+            op_id = event.get("operation_id")
+            if not isinstance(op_id, str) or not OPERATION_ID.fullmatch(op_id) or op_id != expected_id:
+                raise ContractError("provider operation ID must match its deterministic request identity")
+            if op_id in intents:
+                raise ContractError("provider operation ID cannot be reused")
+            at = _timestamp(event.get("at"), f"operations[{index - 1}].at")
+            if previous_at is not None and at < previous_at:
+                raise ContractError("provider operation timestamps must be monotonic")
+            intents[op_id] = {"action": action, "at": at, "target": target}
+            latest_attempt[target] = attempt
+            pending_target.add(target)
+            previous_at = at
+        elif kind == "result":
+            _only_keys(
+                event,
+                {
+                    "sequence", "kind", "operation_id", "outcome",
+                    "provider_operation_name", "response_sha256", "at",
+                },
+                f"operations[{index - 1}]",
+            )
+            op_id = event.get("operation_id")
+            if not isinstance(op_id, str) or op_id not in intents:
+                raise ContractError("provider result must refer to a prior exact operation intent")
+            intent = intents[op_id]
+            if intent.get("resolved"):
+                raise ContractError("provider operation intent already has a result")
+            outcome = event.get("outcome")
+            if not isinstance(outcome, str) or outcome not in {
+                "succeeded", "failed", "reconciled_present", "reconciled_absent"
+            }:
+                raise ContractError("provider operation result is unsupported")
+            action = intent["target"][0]
+            if outcome == "reconciled_present" and action != "create":
+                raise ContractError("reconciled_present applies only to a create intent")
+            if outcome == "reconciled_absent" and action != "delete":
+                raise ContractError("reconciled_absent applies only to a delete intent")
+            provider_name = event.get("provider_operation_name")
+            if provider_name is not None and (
+                not isinstance(provider_name, str)
+                or not OPERATION_NAME.fullmatch(provider_name)
+            ):
+                raise ContractError("provider operation name is malformed")
+            response_sha256 = event.get("response_sha256")
+            if not isinstance(response_sha256, str) or not SHA256.fullmatch(response_sha256):
+                raise ContractError("provider response summary must be SHA-256 fingerprinted")
+            at = _timestamp(event.get("at"), f"operations[{index - 1}].at")
+            if at < intent["at"] or (previous_at is not None and at < previous_at):
+                raise ContractError("provider result timestamp must follow its intent monotonically")
+            intent["resolved"] = True
+            pending_target.remove(intent["target"])
+            previous_at = at
+        else:
+            raise ContractError("provider operation event kind is unsupported")
 
 
 def _validate_controls(
