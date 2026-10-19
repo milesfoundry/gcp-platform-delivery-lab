@@ -1229,14 +1229,16 @@ class GcsObjectStore:
 
     `google-cloud-storage` is imported lazily so local contracts and fake-store
     tests do not need credentials or a cloud SDK installation. A caller must
-    supply the same short-lived token source used by its provider adapter; the
-    GCS credentials verify the configured Google user before every request.
+    supply an explicit project ID and the same short-lived token source used by
+    its provider adapter. The GCS credentials verify the configured Google user
+    before every request; no ambient project or credentials are discovered.
     """
 
     def __init__(
         self,
         bucket_name: str,
         *,
+        project_id: str,
         token_source: AccessTokenSource,
         identity_transport: IdentityTransport,
         expected_email: str,
@@ -1244,6 +1246,11 @@ class GcsObjectStore:
     ):
         if not isinstance(bucket_name, str) or not bucket_name:
             raise ValueError("bucket_name must be non-empty")
+        if (
+            not isinstance(project_id, str)
+            or re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", project_id) is None
+        ):
+            raise ValueError("project_id must be a canonical GCP project ID")
         if token_source is None or identity_transport is None:
             raise ValueError("explicit token and identity transports are required")
         try:
@@ -1260,7 +1267,9 @@ class GcsObjectStore:
             )
         except IdentityVerificationError as exc:
             raise LedgerError(str(exc)) from None
-        self._bucket = storage.Client(credentials=credentials).bucket(bucket_name)
+        self._bucket = storage.Client(
+            project=project_id, credentials=credentials
+        ).bucket(bucket_name)
         self._not_found = NotFound
         self._precondition_failed = PreconditionFailed
 

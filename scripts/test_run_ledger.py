@@ -1363,7 +1363,8 @@ class RunLedgerTests(unittest.TestCase):
             pass
 
         class FakeClient:
-            def __init__(self, *, credentials):
+            def __init__(self, *, project, credentials):
+                self.project = project
                 self.credentials = credentials
 
             def bucket(self, bucket_name):
@@ -1372,8 +1373,10 @@ class RunLedgerTests(unittest.TestCase):
 
         client_holder = {}
 
-        def client_factory(*, credentials):
-            client_holder["client"] = FakeClient(credentials=credentials)
+        def client_factory(*, project, credentials):
+            client_holder["client"] = FakeClient(
+                project=project, credentials=credentials
+            )
             return client_holder["client"]
 
         google = types.ModuleType("google")
@@ -1405,6 +1408,7 @@ class RunLedgerTests(unittest.TestCase):
         with patch.dict(sys.modules, modules):
             adapter = GcsObjectStore(
                 "private-ledger-bucket",
+                project_id="recovery-project-123",
                 token_source=FakeTokenSource(),
                 identity_transport=identity,
                 expected_email="project-reclaimer@example.com",
@@ -1412,6 +1416,7 @@ class RunLedgerTests(unittest.TestCase):
             )
             self.assertIsInstance(adapter._bucket, FakeBucket)
             self.assertEqual(client_holder["client"].bucket_name, "private-ledger-bucket")
+            self.assertEqual(client_holder["client"].project, "recovery-project-123")
             credentials = client_holder["client"].credentials
             headers = {}
             credentials.before_request(
@@ -1438,6 +1443,7 @@ class RunLedgerTests(unittest.TestCase):
             identity.email = "project-reclaimer@example.com"
             wrong_subject_adapter = GcsObjectStore(
                 "private-ledger-bucket",
+                project_id="recovery-project-123",
                 token_source=FakeTokenSource(),
                 identity_transport=identity,
                 expected_email="project-reclaimer@example.com",

@@ -281,11 +281,13 @@ the project lifecycle adapter to verify that caller's Google user token through
 UserInfo. The verified `sub` is recorded in the operation intent, and every
 teardown API request rechecks the configured expected email before using its
 bearer token. Only human user tokens with verified email are supported. The
-GCS ledger adapter now requires an explicit token source, expected email and
-stable Google subject, and verifies them before every storage API request. The
-trusted runtime must still wire that exact token source and principal to both
-provider and ledger adapters. This path is fake-tested source, not authorized
-or qualified for live use. For cost
+GCS ledger adapter now requires an explicit recovery project ID and token
+source, expected email and stable Google subject, and verifies them before
+every storage API request. This prevents client-side ADC/project discovery.
+`scripts/project_reclaimer_runtime.py` assembles the ledger, provider adapter
+and controller with that same token source and identity transport. The
+credential-source launcher and deployed runtime remain unqualified. This path
+is fake-tested source, not authorized or qualified for live use. For cost
 monitoring, the Budget API can scope an alerts-only budget to one project under
 the billing account, while Google recommends keeping
 programmatic budget-notification topics in a FinOps administration project.
@@ -578,8 +580,9 @@ Required manifest fields:
   from deletion and must still be absent for the final audit to pass. This is
   fake-tested source only: the GCS writer verifies an explicit token source
   against the expected email and stable subject before each request, but the
-  collector, ledger and mutation adapter are not connected in a deployed
-  runtime. See Google's
+  collector, ledger and mutation adapter are connected by a source-level
+  reclaimer factory, but no credential-source launcher or deployed runtime
+  qualifies that composition. See Google's
   [OpenID Connect UserInfo endpoint](https://developers.google.com/identity/openid-connect/reference#userinfo)
   and [token types](https://docs.cloud.google.com/docs/authentication/token-types).
   `scripts/gcp_project_lifecycle_adapter.py` supports exact-ID project creation
@@ -600,9 +603,9 @@ Required manifest fields:
   The v3 Project schema uses `displayName` and `state`; the Billing API request
   sends only writable `billingAccountName`, omitting output-only fields.
   The adapter is not deployed or wired to a trusted launcher, and does not solve
-  creator Owner grants, billing-budget preflight, or trusted runtime wiring
-  between the GCS ledger writer and the configured project-reclaimer principal.
-  It remains unqualified for live use. Google
+  creator Owner grants, billing-budget preflight, or a credential-source
+  launcher/deployed project-reclaimer runtime. It remains unqualified for live
+  use. Google
   documents project creation as a separate asynchronous operation
   from billing association; billing association can enable charges. See the
   [projects.create API](https://docs.cloud.google.com/resource-manager/reference/rest/v3/projects/create),

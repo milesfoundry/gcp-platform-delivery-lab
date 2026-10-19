@@ -38,9 +38,11 @@ reconciled. The controller requires the named reclaimer lease, verifies the
 Google user token against a configured expected email, and records the stable
 Google subject with each retirement intent. Each retirement API request is
 verified before use. The GCS writer requires an explicit token source, expected
-email and stable subject, and verifies them before each storage request. A
-trusted runtime must still provide the same token source and principal to both
-adapters; this path is fake-tested only and is not live-qualified.
+recovery project ID, email and stable subject, and verifies them before each
+storage request. The `project_reclaimer_runtime.py` factory passes the same
+token source and identity transport to both adapters and the controller. The
+credential-source launcher and deployed runtime remain unqualified; this path
+is fake-tested only.
 `gcp_cleanup_adapter.py` now implements a deletion-only adapter for exact
 Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GCS objects,
 GKE node-pool/cluster, and GKE Fleet membership/feature resources. It requires an
@@ -58,8 +60,8 @@ gate, not proof of Terraform state or a GKE API deletion-protection setting.
 The source now registers supported run-owned discoveries under a separate
 auditor lease before cleanup. The GCS writer verifies an explicit token source
 against the configured Google email and stable subject before each request;
-trusted runtime wiring, IAM isolation and live provider behavior remain
-unqualified. GCS deletion verifies
+runtime assembly is now source-tested, while credential sourcing, IAM isolation
+and live provider behavior remain unqualified. GCS deletion verifies
 the project number, bucket ownership and London bucket location; it requires an
 explicit zero-duration soft-delete policy and rejects buckets with active soft
 delete retention. `gcp_project_lifecycle_adapter.py` now provides source-level
@@ -100,9 +102,9 @@ receipt matches the current provider-operation count. A failed or ambiguous
 provider operation requires a fresh inventory before resuming cleanup. This
 handoff is implemented and fake-tested in source, but the collector, ledger and
 mutation adapter are not wired together in a deployed identity or live GCP
-environment. The GCS writer verifies an explicit token source against the
-configured Google email and stable subject before each request; trusted runtime
-wiring, control reclamation and live provider qualification remain open.
+environment. The source-level reclaimer factory wires one token source and
+identity transport through GCS and provider requests; credential sourcing,
+control reclamation and live provider qualification remain open.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources

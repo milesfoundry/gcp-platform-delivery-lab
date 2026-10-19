@@ -59,10 +59,12 @@ project after the passed workload audit. Its ledger gate waits for the project
 GET to return 404 before recovery controls can be reclaimed. This is
 mock-tested source only: the controller verifies the named lease against a
 configured Google user principal and records its stable subject. The GCS writer
-now requires an explicit token source, expected email and stable subject, and
-verifies them before every storage request. No trusted runtime yet wires the
-same token source and principal into both adapters, so no live project-deletion
-path is qualified.
+now requires an explicit recovery project ID, token source, expected email and
+stable subject, and verifies them before every storage request. This avoids
+ambient ADC/project discovery. `project_reclaimer_runtime.py` assembles the GCS
+writer, provider adapter and controller with the same token source and identity
+transport. No credential-source launcher or deployed runtime is qualified, so
+live project deletion remains unqualified.
 
 Both roots use local state paths under `.terraform/`. This is not runner-loss
 recovery. The candidate remote state bucket, separate private backup, durable
