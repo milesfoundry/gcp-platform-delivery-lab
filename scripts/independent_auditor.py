@@ -13,15 +13,15 @@ import hashlib
 import json
 import re
 
-from run_contract import ContractError, validate_manifest
+from run_contract import ContractError, validate_manifest, validate_storage_object_id
 from run_ledger import LedgerSnapshot, RunLedger
 from gcp_token_identity import PRINCIPAL_EMAIL
 
 
-AUDIT_SCHEMA = "portfolio.gcp-inventory.v2"
+AUDIT_SCHEMA = "portfolio.gcp-inventory.v3"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 AUDITOR_ID = re.compile(r"^google-user-[A-Za-z0-9._~-]{1,255}$")
-RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:/._@+=,-]{0,1023}$")
+RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:/._@+=,%~-]{0,4095}$")
 
 # These surfaces follow the current resource/ownership matrix. The GCP adapter
 # must prove that every call covers every page and include a response
@@ -67,6 +67,30 @@ RESOURCE_FIELDS = {"surface", "project_id", "id"}
 
 class AuditReportError(ValueError):
     """A normalized audit report is malformed or crosses the requested scope."""
+
+
+def _valid_resource_id(
+    resource_id: object,
+    *,
+    surface: str,
+    project_id: str,
+    run_id: str,
+) -> bool:
+    if not isinstance(resource_id, str) or RESOURCE_ID.fullmatch(resource_id) is None:
+        return False
+    if surface in {"storage.objects", "storage.object_versions"}:
+        try:
+            validate_storage_object_id(
+                resource_id, project_id, run_id, require_run_id=False
+            )
+        except ContractError:
+            return False
+        if surface == "storage.objects" and not resource_id.endswith("@live"):
+            return False
+        if surface == "storage.object_versions" and resource_id.endswith("@live"):
+            return False
+        return True
+    return "%" not in resource_id and not resource_id.startswith("gs://")
 
 
 @dataclass(frozen=True)
@@ -221,9 +245,11 @@ def assess_workload_inventory(manifest: object, report: object) -> AuditAssessme
             raise AuditReportError(
                 f"audit resource {index} crosses the run project scope"
             )
-        if (
-            not isinstance(resource_id, str)
-            or RESOURCE_ID.fullmatch(resource_id) is None
+        if not _valid_resource_id(
+            resource_id,
+            surface=surface,
+            project_id=project_id,
+            run_id=run["run_id"],
         ):
             raise AuditReportError(
                 f"audit resource {index} has an invalid canonical ID"

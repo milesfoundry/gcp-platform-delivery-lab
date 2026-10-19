@@ -202,11 +202,22 @@ class GCPInventoryAdapterTests(unittest.TestCase):
                     "name": f"projects/{PROJECT}/subscriptions/sub-a"
                 }]}
             if url.endswith("/storage/v1/b"):
-                return {"items": [{"name": "bucket-a"}]}
+                return {"items": [{
+                    "name": "bucket-a",
+                    "softDeletePolicy": {"retentionDurationSeconds": "604800"},
+                }]}
+            if url.endswith("/b/bucket-a/o") and _params.get("softDeleted") == "true":
+                return {"items": [{
+                    "name": "active/report.json",
+                    "generation": "5",
+                    "softDeleteTime": "2026-10-19T00:00:00Z",
+                    "hardDeleteTime": "2026-10-26T00:00:00Z",
+                }]}
             if url.endswith("/b/bucket-a/o"):
                 return {"items": [
-                    {"name": "active/report.json", "generation": "7"},
-                    {
+                {"name": "active/report.json", "generation": "7"},
+                {"name": "active/report?special.json", "generation": "8"},
+                {
                         "name": "active/report.json",
                         "generation": "6",
                         "timeDeleted": "2026-10-01T00:00:00Z",
@@ -219,12 +230,17 @@ class GCPInventoryAdapterTests(unittest.TestCase):
                 ),
             }]}
 
+        transport = FakeTransport(populated)
         report = GCPInventoryAdapter(
-            FakeTransport(populated), access_token="short-lived-test-token"
+            transport, access_token="short-lived-test-token"
         ).collect(
             manifest, observed_at="2026-10-19T02:00:00Z", expected_auditor_email="independent-reader@example.com"
         )
         resources = {(item["surface"], item["id"]) for item in report["resources"]}
+        self.assertTrue(any(
+            url.endswith("/b/bucket-a/o") and params.get("softDeleted") == "true"
+            for url, params, *_ in transport.calls
+        ))
         self.assertIn(
             ("pubsub.topics", f"projects/{PROJECT}/topics/topic-a"), resources
         )
@@ -253,10 +269,38 @@ class GCPInventoryAdapterTests(unittest.TestCase):
         )
         self.assertIn(("compute.router_nats", nat_id), resources)
         self.assertIn(
-            ("storage.objects", "gs://bucket-a/active/report.json"), resources
+            (
+                "storage.objects",
+                f"projects/{PROJECT}/buckets/bucket-a/objects/active%2Freport.json@live",
+            ),
+            resources,
         )
         self.assertIn(
-            ("storage.object_versions", "gs://bucket-a/active/report.json@6"),
+            (
+                "storage.objects",
+                f"projects/{PROJECT}/buckets/bucket-a/objects/active%2Freport%3Fspecial.json@live",
+            ),
+            resources,
+        )
+        self.assertIn(
+            (
+                "storage.object_versions",
+                f"projects/{PROJECT}/buckets/bucket-a/objects/active%2Freport.json@6",
+            ),
+            resources,
+        )
+        self.assertIn(
+            (
+                "storage.object_versions",
+                f"projects/{PROJECT}/buckets/bucket-a/objects/active%2Freport.json@5",
+            ),
+            resources,
+        )
+        self.assertIn(
+            (
+                "storage.object_versions",
+                f"projects/{PROJECT}/buckets/bucket-a/objects/active%2Freport%3Fspecial.json@8",
+            ),
             resources,
         )
         assessment = assess_workload_inventory(manifest, report)

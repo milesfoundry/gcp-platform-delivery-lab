@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import re
+from urllib.parse import quote, unquote
 
 
 SCHEMA = "portfolio.gcp-run.v2"
@@ -20,7 +21,7 @@ RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$")
 PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_DIGEST = re.compile(r"^ghcr\.io/[a-z0-9-]+/[a-z0-9-]+@sha256:[0-9a-f]{64}$")
-RESOURCE_URI = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:/._@+=,-]{0,1023}$")
+RESOURCE_URI = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:/._@+=,%~-]{0,4095}$")
 GENERATION = re.compile(r"^[1-9][0-9]*$")
 BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]$")
 CRC32C = re.compile(r"^[A-Za-z0-9+/]{6}==$")
@@ -569,6 +570,11 @@ def _validate_operation_target(
         or not project_segment.search(resource_id)
     ):
         raise ContractError("provider operation target must be a canonical URI in this run project")
+    if resource_type == "gcp.storage.object":
+        validate_storage_object_id(resource_id, project_id, run_id)
+        return
+    if "%" in resource_id:
+        raise ContractError("percent-encoded segments are supported only for Storage objects")
     if resource_type in REGIONAL_RESOURCE_TYPES and not any(
         marker in resource_id
         for marker in (f"/regions/{REGION}/", f"/locations/{REGION}/")
@@ -579,6 +585,38 @@ def _validate_operation_target(
             raise ContractError("Config Sync Feature operation target is unsupported")
     elif run_id not in resource_id:
         raise ContractError("provider operation target must include the run ID")
+
+
+def validate_storage_object_id(
+    resource_id: str,
+    project_id: str,
+    run_id: str,
+    *,
+    require_run_id: bool = True,
+) -> None:
+    parts = resource_id.split("/")
+    if (
+        len(parts) != 6
+        or parts[:3] != ["projects", project_id, "buckets"]
+        or parts[4] != "objects"
+        or re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", parts[3]) is None
+    ):
+        raise ContractError("Storage object ID must bind the exact project and bucket")
+    try:
+        encoded_name, version = parts[5].rsplit("@", 1)
+        object_name = unquote(encoded_name, errors="strict")
+    except (IndexError, UnicodeDecodeError, ValueError):
+        raise ContractError("Storage object ID encoding is malformed") from None
+    if (
+        not object_name
+        or quote(object_name, safe="") != encoded_name
+        or len(object_name.encode("utf-8")) > 1024
+        or "\x00" in object_name
+        or (version != "live" and GENERATION.fullmatch(version) is None)
+    ):
+        raise ContractError("Storage object ID is not canonical")
+    if require_run_id and run_id not in parts[3] and run_id not in object_name:
+        raise ContractError("Storage object target must include the run ID")
 
 
 def _validate_operations(
@@ -866,6 +904,12 @@ def validate_manifest(manifest: object) -> dict:
             or not project_segment.search(resource_id)
         ):
             raise ContractError("resource id must be a canonical URI in this project")
+        if resource_type == "gcp.storage.object":
+            validate_storage_object_id(resource_id, project_id, run_id)
+        elif "%" in resource_id:
+            raise ContractError(
+                "percent-encoded segments are supported only for Storage objects"
+            )
         if resource_type in REGIONAL_RESOURCE_TYPES and not any(
             marker in resource_id
             for marker in (f"/regions/{REGION}/", f"/locations/{REGION}/")
@@ -884,7 +928,7 @@ def validate_manifest(manifest: object) -> dict:
                 raise ContractError("Config Sync Feature id is unsupported")
             if proof != "run_project":
                 raise ContractError("Feature ownership must use its dedicated run project")
-        elif run_id not in resource_id:
+        elif resource_type != "gcp.storage.object" and run_id not in resource_id:
             raise ContractError("run-scoped resource id must include the run id")
         if (
             not isinstance(entry.get("status"), str)

@@ -15,7 +15,7 @@ import re
 from typing import Callable, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote, urlsplit
 import uuid
 
 from recovery_controller import ProviderReceipt
@@ -33,6 +33,7 @@ SUPPORTED_TYPES = frozenset(
         "gcp.compute.router_nat",
         "gcp.pubsub.topic",
         "gcp.pubsub.subscription",
+        "gcp.storage.object",
         "gcp.gke.node_pool",
         "gcp.gke.cluster",
         "gcp.gkehub.feature_membership",
@@ -44,8 +45,10 @@ GOOGLE_HOSTS = frozenset(
     {
         "compute.googleapis.com",
         "container.googleapis.com",
+        "cloudresourcemanager.googleapis.com",
         "gkehub.googleapis.com",
         "pubsub.googleapis.com",
+        "storage.googleapis.com",
         "www.googleapis.com",
     }
 )
@@ -168,6 +171,14 @@ def _segments(resource_id: str, resource_type: str) -> tuple[str, ...]:
             if not path.startswith("/v1/"):
                 raise CleanupAdapterError("Pub/Sub resource ID has an unsupported API path")
             path = path[len("/v1/"):]
+        elif parsed.hostname == "storage.googleapis.com":
+            if not path.startswith("/storage/v1/"):
+                raise CleanupAdapterError("Storage resource ID has an unsupported API path")
+            path = path[len("/storage/v1/"):]
+        elif parsed.hostname == "cloudresourcemanager.googleapis.com":
+            if not path.startswith("/v3/"):
+                raise CleanupAdapterError("Resource Manager ID has an unsupported API path")
+            path = path[len("/v3/"):]
         else:
             version = next(
                 (v for v in ("v2", "v1alpha", "v1") if path.startswith(f"/{v}/")),
@@ -181,7 +192,12 @@ def _segments(resource_id: str, resource_type: str) -> tuple[str, ...]:
     parts = tuple(path.split("/"))
     if any(
         not item or item in {".", ".."}
-        or not re.fullmatch(r"[A-Za-z0-9._~-]+", item)
+        or not re.fullmatch(
+            r"(?:[A-Za-z0-9._~-]|%[0-9A-F]{2}|@)+"
+            if resource_type == "gcp.storage.object"
+            else r"[A-Za-z0-9._~-]+",
+            item,
+        )
         for item in parts
     ):
         raise CleanupAdapterError("resource ID path is malformed")
@@ -219,6 +235,34 @@ def _resource_path(resource_type: str, resource_id: str, project_id: str, run_id
             raise CleanupAdapterError("router NAT resource name is malformed")
         router = "/".join(parts[:6])
         return "compute.googleapis.com", f"/compute/v1/{router}", parts[7]
+    if resource_type == "gcp.storage.object":
+        if (
+            len(parts) != 6
+            or parts[2] != "buckets"
+            or parts[4] != "objects"
+            or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", parts[3])
+        ):
+            raise CleanupAdapterError("Storage object resource name is malformed")
+        try:
+            encoded_name, generation = parts[5].rsplit("@", 1)
+            object_name = unquote(encoded_name, errors="strict")
+        except (IndexError, UnicodeDecodeError, ValueError):
+            raise CleanupAdapterError("Storage object ID encoding is malformed") from None
+        if (
+            not object_name
+            or quote(object_name, safe="") != encoded_name
+            or len(object_name.encode("utf-8")) > 1024
+            or "\x00" in object_name
+            or (generation != "live" and not re.fullmatch(r"[1-9][0-9]*", generation))
+        ):
+            raise CleanupAdapterError("Storage object ID is not canonical")
+        path = f"/storage/v1/b/{parts[3]}/o/{encoded_name}"
+        target = {
+            "bucket": parts[3],
+            "object": object_name,
+            "generation": generation,
+        }
+        return "storage.googleapis.com", path, target
     if resource_type == "gcp.pubsub.topic":
         if len(parts) != 4 or parts[2] != "topics":
             raise CleanupAdapterError("Pub/Sub topic resource name is malformed")
@@ -284,6 +328,8 @@ class GCPCleanupAdapter:
         )
         if resource_type == "gcp.compute.router_nat":
             return self._remove_nat(path, discriminator)
+        if resource_type == "gcp.storage.object":
+            return self._remove_storage_object(path, discriminator)
         if resource_type == "gcp.gke.cluster":
             if self._cluster_delete_authorizer is None:
                 raise CleanupAdapterError(
@@ -326,6 +372,8 @@ class GCPCleanupAdapter:
         host, path, discriminator = _resource_path(
             resource_type, resource_id, self._project_id, self._run_id
         )
+        if resource_type == "gcp.storage.object":
+            return self._inspect_storage_object(path, discriminator)
         response, payload = self._send("GET", host, path)
         if response.status_code == 404:
             return ProviderReceipt("absent", _fingerprint({"status": 404}))
@@ -399,6 +447,113 @@ class GCPCleanupAdapter:
             self._operation_path(receipt.operation_name, self._project_id)
         return receipt
 
+    def _inspect_storage_object(self, object_path, target):
+        bucket = self._verify_storage_bucket(target["bucket"])
+        if bucket is None:
+            return ProviderReceipt("absent", _fingerprint({"status": 404}))
+        query = ""
+        if target["generation"] != "live":
+            query = f"?generation={target['generation']}"
+        response, payload = self._send(
+            "GET", "storage.googleapis.com", object_path + query
+        )
+        if response.status_code == 404:
+            return ProviderReceipt("absent", _fingerprint({"status": 404}))
+        metadata = self._validate_storage_object(payload, target)
+        return ProviderReceipt("present", _fingerprint(metadata))
+
+    def _remove_storage_object(self, object_path, target):
+        bucket = self._verify_storage_bucket(target["bucket"])
+        if bucket is None:
+            return ProviderReceipt("absent", _fingerprint({"status": 404}))
+        query = ""
+        if target["generation"] != "live":
+            query = f"?generation={target['generation']}"
+        response, metadata = self._send(
+            "GET", "storage.googleapis.com", object_path + query
+        )
+        if response.status_code == 404:
+            return ProviderReceipt("absent", _fingerprint({"status": 404}))
+        metadata = self._validate_storage_object(metadata, target)
+        if target["generation"] == "live":
+            delete_query = f"?ifGenerationMatch={metadata['generation']}"
+        else:
+            delete_query = f"?generation={target['generation']}"
+        response, payload = self._send(
+            "DELETE", "storage.googleapis.com", object_path + delete_query
+        )
+        if response.status_code == 404:
+            return ProviderReceipt("absent", _fingerprint({"status": 404}))
+        if response.status_code == 412:
+            raise CleanupAdapterError("Storage object generation changed before deletion")
+        if response.status_code not in {200, 204}:
+            raise CleanupAdapterError(
+                f"Storage object delete returned HTTP {response.status_code}"
+            )
+        return ProviderReceipt(
+            "succeeded",
+            _fingerprint(payload if isinstance(payload, dict) else {"status": response.status_code}),
+        )
+
+    def _verify_storage_bucket(self, bucket_name):
+        project_url = f"/v3/projects/{self._project_id}"
+        response, project = self._send(
+            "GET", "cloudresourcemanager.googleapis.com", project_url
+        )
+        if response.status_code == 404:
+            return None
+        if (
+            response.status_code != 200
+            or not isinstance(project, dict)
+            or project.get("projectId") != self._project_id
+        ):
+            raise CleanupAdapterError("Storage target project lookup failed")
+        project_number = project.get("projectNumber")
+        if (
+            isinstance(project_number, bool)
+            or not isinstance(project_number, (str, int))
+            or not str(project_number).isdigit()
+            or str(project_number).startswith("0")
+        ):
+            raise CleanupAdapterError("Storage target project number is malformed")
+        response, bucket = self._send(
+            "GET", "storage.googleapis.com", f"/storage/v1/b/{bucket_name}"
+        )
+        if response.status_code == 404:
+            return None
+        if (
+            response.status_code != 200
+            or not isinstance(bucket, dict)
+            or bucket.get("name") != bucket_name
+            or str(bucket.get("projectNumber")) != str(project_number)
+            or str(bucket.get("location", "")).upper() != "EUROPE-WEST2"
+        ):
+            raise CleanupAdapterError(
+                "Storage bucket is not owned by the exact London run project"
+            )
+        soft_delete_policy = bucket.get("softDeletePolicy")
+        if not isinstance(soft_delete_policy, dict):
+            raise CleanupAdapterError("Storage bucket soft-delete policy is malformed")
+        retention = soft_delete_policy.get("retentionDurationSeconds")
+        if retention is None or isinstance(retention, bool) or str(retention) not in {"0", "0s"}:
+            raise CleanupAdapterError(
+                "Storage object cleanup requires a bucket with soft delete disabled"
+            )
+        return bucket
+
+    @staticmethod
+    def _validate_storage_object(payload, target):
+        if not isinstance(payload, dict):
+            raise CleanupAdapterError("Storage object metadata is malformed")
+        if payload.get("bucket") != target["bucket"] or payload.get("name") != target["object"]:
+            raise CleanupAdapterError("Storage object metadata does not match the exact target")
+        generation = payload.get("generation")
+        if isinstance(generation, bool) or not str(generation).isdigit() or str(generation).startswith("0"):
+            raise CleanupAdapterError("Storage object generation is malformed")
+        if target["generation"] != "live" and str(generation) != target["generation"]:
+            raise CleanupAdapterError("Storage object generation does not match the exact target")
+        return payload
+
     def _send(self, method, host, path, *, body=None):
         parsed_target = urlsplit(path)
         path_parts = parsed_target.path.split("/")
@@ -409,17 +564,35 @@ class GCPCleanupAdapter:
             or (
                 parsed_target.query
                 and (
-                    method != "DELETE"
-                    or host != "compute.googleapis.com"
-                    or not re.fullmatch(
-                        r"requestId=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-                        parsed_target.query,
+                    not (
+                        method == "DELETE"
+                        and host == "compute.googleapis.com"
+                        and re.fullmatch(
+                            r"requestId=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                            parsed_target.query,
+                        )
+                    )
+                    and not (
+                        host == "storage.googleapis.com"
+                        and (
+                            method == "GET"
+                            and re.fullmatch(r"generation=[1-9][0-9]*", parsed_target.query)
+                            or method == "DELETE"
+                            and re.fullmatch(r"generation=[1-9][0-9]*", parsed_target.query)
+                            or method == "DELETE"
+                            and re.fullmatch(r"ifGenerationMatch=[1-9][0-9]*", parsed_target.query)
+                        )
                     )
                 )
             )
             or any(
                 not part or part in {".", ".."}
-                or not re.fullmatch(r"[A-Za-z0-9._~-]+", part)
+                or not re.fullmatch(
+                    r"(?:[A-Za-z0-9._~-]|%[0-9A-F]{2})+"
+                    if host == "storage.googleapis.com"
+                    else r"[A-Za-z0-9._~-]+",
+                    part,
+                )
                 for part in path_parts[1:]
             )
         ):

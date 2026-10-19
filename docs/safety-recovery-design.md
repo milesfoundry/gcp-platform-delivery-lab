@@ -308,6 +308,7 @@ cross-boundary actions. Those remain qualification gates.
 | Reaper — Fleet / Config Sync run membership | `gkehub.memberships.get/list/delete`; `gkehub.membershipfeatures.get/list/delete`; `gkehub.operations.get/list` if asynchronous operations require polling | Same disposable run project, after confirming the membership and membership-feature resources inherit the run project boundary | Delete only the per-run `configmanagement` Feature after its membership is absent; never mutate Fleet or project IAM policies from the reaper. Verify provider calls and resource-level grantability. |
 | Reaper — per-run Config Sync Feature | `gkehub.features.get/delete`; `gkehub.operations.get/list` where deletion is asynchronous. `gkehub.features.create` belongs to the run provisioner, not reaper | Exact Feature in the disposable run project; remove only after membership feature and membership are absent | Never touch a feature in another project; verify provider API calls and project-level scope. The API parent is the project/location (`projects/*/locations/*`). |
 | Reaper — Pub/Sub workload resources | `pubsub.subscriptions.get/delete`; `pubsub.topics.get/delete` | Exact per-run topic/subscription IDs in the disposable project | Delete subscriptions before topics; Pub/Sub delete is a direct exact-resource REST request. Confirm the API project's full inventory and IAM boundary before live use. See [subscription delete](https://docs.cloud.google.com/pubsub/docs/reference/rest/v1/projects.subscriptions/delete) and [topic delete](https://docs.cloud.google.com/pubsub/docs/reference/rest/v1/projects.topics/delete). |
+| Reaper — run-project GCS objects | `resourcemanager.projects.get`; `storage.buckets.get`; `storage.objects.get/delete` | Exact project-bound bucket/object ID; verify bucket project number and London location before object access | Object versions use the exact generation; live-object deletion uses `ifGenerationMatch`. Set zero soft-delete retention when creating ephemeral buckets; the default is seven days. The adapter rejects active soft-delete retention, since retained objects cannot be immediately purged. Inventory must list `softDeleted=true` separately when retention is active. See [bucket get](https://docs.cloud.google.com/storage/docs/json_api/v1/buckets/get), [object delete](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/delete), [object list](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/list), and [soft-delete overview](https://docs.cloud.google.com/storage/docs/soft-delete). |
 | Reaper runtime — read/update durable manifest | At minimum `storage.objects.get` and the write permissions required by the selected JSON API method. Replacing an existing object can require `storage.objects.create` plus `storage.objects.delete`; metadata updates use `storage.objects.update`. Use generation-match preconditions on every state transition. | Conditional binding to the exact `runs/{run_id}/manifest.json` object in the recovery bucket, with uniform bucket-level access | Never grant `storage.objects.list`, bucket administration, object IAM policy, or access to other run paths. Confirm CAS method permissions and retention/versioning semantics in fake and isolated integration tests; retain closed generations for audit. |
 | Scheduler execution identity — trigger its reaper | `run.jobs.run` via `roles/run.invoker` bound to only the matching per-run Cloud Run Job | Job resource, Scheduler job and Scheduler service account all stay in the recovery project; use one invocation identity per run | No cleanup permissions and no invocation of any other reaper Job. Verify the Cloud Scheduler service-agent token-creation path, OAuth request, fixed request body, retries, and exact Job IAM binding end to end. |
 | Recovery-control provisioner — create per-run reaper | Cloud Run Job get/create/update/delete permissions (`run.jobs.get/create/update/delete`), `run.jobs.setIamPolicy` for only that Job, `iam.serviceAccounts.actAs` for its unique execution service account; Artifact Registry read on the reviewed image repository | Recovery project, Job resource, service account and image repository; separate short-lived provisioner authority | This control-plane identity is not the runtime identity. It must not be shared with the run cleanup identity or included in a run-project role. Verify exact image pull and Job create permissions using the selected deployment method. |
@@ -730,18 +731,24 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    cleanup also covers provider deletion followed by a lost response: takeover
    inspects the exact ID, records absence and does not submit a second delete.
    `scripts/gcp_cleanup_adapter.py` adds a deletion-only REST adapter for
-   Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GKE
-   node-pool/cluster, and Fleet membership/feature resources. Its injectable
-   transport and explicit short-lived token source have local mock tests for
-   exact target paths, URL and project/run boundaries, long-running operation
-   scope, router fingerprint updates, and an exact-cluster protection review
-   gate. It cannot create
-   resources; Storage object deletion remains unsupported. The adapter is not
-   wired to `RecoveryController`, a deployed identity or a live provider. The
-   cluster gate is only an external predicate; it does not inspect or disable
-   GKE deletion protection. Independently discovered inventory, API-to-ledger
-   principal binding, full resource-matrix coverage and the actual IAM boundary
-   remain open before hosted cleanup credentials are added.
+   Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, exact
+   GCS object versions, GKE node-pool/cluster, and Fleet membership/feature
+   resources. Its injectable transport and explicit short-lived token source
+   have local mock tests for target paths, URL and project/run boundaries,
+   long-running operation scope, router fingerprints, storage generation
+   preconditions, bucket project ownership, and the exact-cluster review gate.
+   It cannot create resources. `gcp_inventory_adapter.py` now emits the v3 report
+   project-bound bucket/object/generation ID form and inventories soft-deleted
+   generations separately when a bucket reports active retention. Cloud Storage
+   defaults new buckets to seven-day soft deletion; Terraform must explicitly
+   create ephemeral buckets with zero retention. The mutation adapter rejects
+   active retention, and the API cannot immediately purge already soft-deleted
+   objects; those leave cleanup incomplete until retention expires. The adapters
+   are not wired to `RecoveryController`, deployed identities or live providers.
+   The cluster gate is only an external predicate; it does not inspect or
+   disable GKE deletion protection. Dynamic inventory registration, auditor/API
+   principal binding, actual IAM isolation, remote state/backup and lifecycle
+   deployment remain open.
 6. `.github/workflows/validate.yaml` remains credential-free for CI and runs
    schema, Terraform-render, cleanup, state, and negative-boundary checks. Add
    lifecycle workflow only after the reaper and cleanup path are deployed and

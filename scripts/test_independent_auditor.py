@@ -106,7 +106,6 @@ class IndependentAuditorTests(unittest.TestCase):
         evidence["project_id"] = "different-project"
         with self.assertRaises(AuditReportError):
             assess_workload_inventory(intent(), evidence)
-
         different_manifest = intent()
         different_manifest["source"]["revision"] = "c" * 40
         with self.assertRaises(AuditReportError):
@@ -126,6 +125,24 @@ class IndependentAuditorTests(unittest.TestCase):
         evidence["coverage"]["compute.networks"]["resource_count"] = 1
         with self.assertRaises(AuditReportError):
             assess_workload_inventory(intent(), evidence)
+
+    def test_gcs_inventory_ids_require_canonical_percent_encoding(self):
+        for resource_id in (
+            "gs://bucket-a/active/report%2f.json",
+            "gs://bucket-a/active/report%ZZ.json",
+            "projects/other-lab-456/buckets/bucket-a/objects/report%3F.json@7",
+            f"projects/{PROJECT}/buckets/bucket-a/objects/report%3F.json@live",
+        ):
+            evidence = report()
+            evidence["resources"] = [{
+                "surface": "storage.object_versions",
+                "project_id": PROJECT,
+                "id": resource_id,
+            }]
+            evidence["coverage"]["storage.object_versions"]["resource_count"] = 1
+            with self.subTest(resource_id=resource_id):
+                with self.assertRaises(AuditReportError):
+                    assess_workload_inventory(intent(), evidence)
 
     def test_auditor_identity_cannot_match_run_reaper_or_scheduler(self):
         manifest = intent()

@@ -31,17 +31,24 @@ complete; only a terminal result resolves an intent. The credential-free
 `recovery_controller.py` submits once or resumes by polling/inspecting through
 an injected provider adapter, and can run ordered cleanup against that adapter.
 `gcp_cleanup_adapter.py` now implements a deletion-only adapter for exact
-Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GKE
-node-pool/cluster, and GKE Fleet membership/feature resources. It requires an
+Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GCS objects,
+GKE node-pool/cluster, and GKE Fleet membership/feature resources. It requires an
 explicitly supplied short-lived token source and transport; it does not discover
 credentials. Mocked tests cover request paths, project/run boundaries,
 async-operation scope, router fingerprint updates, and the cluster-protection
-review gate. The adapter has not been wired
-to the ledger controller or deployed identities. Its cluster review callback is
-an external gate, not proof that API deletion protection was disabled.
-Independent provider discovery/audit, Storage object cleanup, API-to-ledger
-principal binding, IAM isolation and live provider behavior remain unqualified.
-No cloud resource creation is authorized by these files.
+review gate. GCS object IDs bind project, bucket, encoded object name and either
+an exact generation or `live`; deletion checks project number, bucket ownership,
+London location and soft-delete policy. The inventory adapter lists soft-deleted
+generations separately when bucket retention is active. A bucket with active
+soft-delete retention cannot be cleaned within the lab deadline and is rejected
+by the mutation adapter. The cleanup adapter has not been wired to the ledger
+controller or deployed identities. Its cluster review callback is an external
+gate, not proof that API deletion protection was disabled.
+Independent provider discovery/audit, API-to-ledger principal binding, IAM
+isolation and live provider behavior remain unqualified. GCS deletion verifies
+the project number, bucket ownership and London bucket location; it requires an
+explicit zero-duration soft-delete policy and rejects buckets with active soft
+delete retention. No cloud resource creation is authorized by these files.
 Fake controller tests cover a create committed before a lost response,
 cross-run project-ID rejection before provider access, and repeated cleanup
 after a confirmed delete without a second delete call. These verify the local

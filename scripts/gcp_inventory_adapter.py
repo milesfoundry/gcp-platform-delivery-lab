@@ -448,24 +448,58 @@ class GCPInventoryAdapter:
             bucket_name = bucket.get("name")
             if not isinstance(bucket_name, str) or not bucket_name:
                 raise InventoryCollectionError("Storage bucket lacks a stable name")
+            soft_delete_policy = bucket.get("softDeletePolicy")
+            if not isinstance(soft_delete_policy, dict):
+                raise InventoryCollectionError(
+                    "Storage bucket soft-delete policy is not observable"
+                )
+            retention = soft_delete_policy.get("retentionDurationSeconds")
+            if (
+                retention is None
+                or isinstance(retention, bool)
+                or not str(retention).isdigit()
+            ):
+                raise InventoryCollectionError(
+                    "Storage bucket soft-delete retention is malformed"
+                )
             result = self._list(
                 f"{storage}/b/{quote(bucket_name, safe='')}/o",
                 params={"versions": "true"},
             )
             object_responses.append((bucket_name, result.response_sha256, result.pages))
-            for item in result.resources:
+            bucket_objects = [(item, True) for item in result.resources]
+            if int(retention) > 0:
+                soft_deleted = self._list(
+                    f"{storage}/b/{quote(bucket_name, safe='')}/o",
+                    params={"softDeleted": "true"},
+                )
+                object_responses.append((
+                    f"{bucket_name}:soft-deleted",
+                    soft_deleted.response_sha256,
+                    soft_deleted.pages,
+                ))
+                bucket_objects.extend((item, False) for item in soft_deleted.resources)
+            for item, live_candidate in bucket_objects:
                 object_name = item.get("name")
                 generation = item.get("generation")
                 if not isinstance(object_name, str) or not isinstance(generation, str):
                     raise InventoryCollectionError(
                         "Storage object lacks name or generation"
                     )
-                encoded_object_name = quote(object_name, safe="/-_.~")
+                encoded_object_name = quote(object_name, safe="")
                 versions.append({
-                    "id": f"gs://{bucket_name}/{encoded_object_name}@{generation}",
+                    "id": (
+                        f"projects/{project_id}/buckets/{bucket_name}/objects/"
+                        f"{encoded_object_name}@{generation}"
+                    ),
                 })
-                if item.get("timeDeleted") is None:
-                    objects.append({"id": f"gs://{bucket_name}/{encoded_object_name}"})
+                if live_candidate and item.get("timeDeleted") is None:
+                    objects.append({
+                        "id": (
+                            f"projects/{project_id}/buckets/{bucket_name}/objects/"
+                            f"{encoded_object_name}@live"
+                        )
+                    })
         collections["storage.objects"] = self._synthetic_collection(
             objects, source=object_responses,
             pages=sum(item[2] for item in object_responses),

@@ -160,6 +160,154 @@ class GCPCleanupAdapterTests(unittest.TestCase):
             )
         self.assertEqual(foreign.calls, [])
 
+    def test_storage_generation_delete_verifies_project_bucket_and_object_identity(self):
+        resource_id = (
+            f"projects/{PROJECT}/buckets/{RUN}-objects/objects/"
+            "active%2Freport.json@7"
+        )
+        transport = FakeTransport([
+            FakeResponse(200, {"projectId": PROJECT, "projectNumber": "123456789"}),
+            FakeResponse(200, {
+                "name": f"{RUN}-objects",
+                "projectNumber": "123456789",
+                "location": "europe-west2",
+                "softDeletePolicy": {"retentionDurationSeconds": "0"},
+            }),
+            FakeResponse(200, {
+                "bucket": f"{RUN}-objects",
+                "name": "active/report.json",
+                "generation": "7",
+            }),
+            FakeResponse(204),
+        ])
+        result = adapter(transport).submit(
+            "delete", "gcp.storage.object", resource_id, {}
+        )
+
+        self.assertEqual(result.state, "succeeded")
+        self.assertEqual(
+            [(call[0], call[1]) for call in transport.calls],
+            [
+                ("GET", f"https://cloudresourcemanager.googleapis.com/v3/projects/{PROJECT}"),
+                ("GET", f"https://storage.googleapis.com/storage/v1/b/{RUN}-objects"),
+                (
+                    "GET",
+                    f"https://storage.googleapis.com/storage/v1/b/{RUN}-objects/o/active%2Freport.json?generation=7",
+                ),
+                (
+                    "DELETE",
+                    f"https://storage.googleapis.com/storage/v1/b/{RUN}-objects/o/active%2Freport.json?generation=7",
+                ),
+            ],
+        )
+
+    def test_storage_live_delete_uses_generation_precondition(self):
+        resource_id = (
+            f"projects/{PROJECT}/buckets/{RUN}-objects/objects/"
+            "active%2Freport.json@live"
+        )
+        transport = FakeTransport([
+            FakeResponse(200, {"projectId": PROJECT, "projectNumber": 123456789}),
+            FakeResponse(200, {
+                "name": f"{RUN}-objects",
+                "projectNumber": "123456789",
+                "location": "EUROPE-WEST2",
+                "softDeletePolicy": {"retentionDurationSeconds": "0s"},
+            }),
+            FakeResponse(200, {
+                "bucket": f"{RUN}-objects",
+                "name": "active/report.json",
+                "generation": "8",
+            }),
+            FakeResponse(204),
+        ])
+        result = adapter(transport).submit(
+            "delete", "gcp.storage.object", resource_id, {}
+        )
+        self.assertEqual(result.state, "succeeded")
+        self.assertTrue(transport.calls[2][1].endswith("/o/active%2Freport.json"))
+        self.assertTrue(
+            transport.calls[3][1].endswith(
+                "/o/active%2Freport.json?ifGenerationMatch=8"
+            )
+        )
+
+    def test_storage_inspection_reconciles_exact_generation_absence(self):
+        resource_id = (
+            f"projects/{PROJECT}/buckets/{RUN}-objects/objects/"
+            "active%2Freport.json@7"
+        )
+        transport = FakeTransport([
+            FakeResponse(200, {"projectId": PROJECT, "projectNumber": "123456789"}),
+            FakeResponse(200, {
+                "name": f"{RUN}-objects",
+                "projectNumber": "123456789",
+                "location": "europe-west2",
+                "softDeletePolicy": {"retentionDurationSeconds": "0"},
+            }),
+            FakeResponse(404),
+        ])
+        result = adapter(transport).inspect_resource(
+            "gcp.storage.object", resource_id
+        )
+        self.assertEqual(result.state, "absent")
+        self.assertTrue(transport.calls[2][1].endswith("?generation=7"))
+
+    def test_storage_live_precondition_race_is_not_reported_as_success(self):
+        resource_id = (
+            f"projects/{PROJECT}/buckets/{RUN}-objects/objects/report.json@live"
+        )
+        transport = FakeTransport([
+            FakeResponse(200, {"projectId": PROJECT, "projectNumber": "123456789"}),
+            FakeResponse(200, {
+                "name": f"{RUN}-objects",
+                "projectNumber": "123456789",
+                "location": "europe-west2",
+                "softDeletePolicy": {"retentionDurationSeconds": "0"},
+            }),
+            FakeResponse(200, {
+                "bucket": f"{RUN}-objects",
+                "name": "report.json",
+                "generation": "8",
+            }),
+            FakeResponse(412),
+        ])
+        with self.assertRaisesRegex(CleanupAdapterError, "generation changed"):
+            adapter(transport).submit("delete", "gcp.storage.object", resource_id, {})
+
+    def test_storage_refuses_bucket_from_another_project_before_object_delete(self):
+        resource_id = (
+            f"projects/{PROJECT}/buckets/{RUN}-objects/objects/report.json@4"
+        )
+        transport = FakeTransport([
+            FakeResponse(200, {"projectId": PROJECT, "projectNumber": "123456789"}),
+            FakeResponse(200, {
+                "name": f"{RUN}-objects",
+                "projectNumber": "987654321",
+                "location": "europe-west2",
+            }),
+        ])
+        with self.assertRaisesRegex(CleanupAdapterError, "not owned by the exact London run project"):
+            adapter(transport).submit("delete", "gcp.storage.object", resource_id, {})
+        self.assertEqual([call[0] for call in transport.calls], ["GET", "GET"])
+
+    def test_storage_refuses_bucket_with_soft_delete_retention(self):
+        resource_id = (
+            f"projects/{PROJECT}/buckets/{RUN}-objects/objects/report.json@4"
+        )
+        transport = FakeTransport([
+            FakeResponse(200, {"projectId": PROJECT, "projectNumber": "123456789"}),
+            FakeResponse(200, {
+                "name": f"{RUN}-objects",
+                "projectNumber": "123456789",
+                "location": "europe-west2",
+                "softDeletePolicy": {"retentionDurationSeconds": "604800"},
+            }),
+        ])
+        with self.assertRaisesRegex(CleanupAdapterError, "soft delete disabled"):
+            adapter(transport).submit("delete", "gcp.storage.object", resource_id, {})
+        self.assertEqual([call[0] for call in transport.calls], ["GET", "GET"])
+
     def test_cluster_delete_requires_exact_protection_review(self):
         resource_id = (
             f"projects/{PROJECT}/locations/europe-west2/clusters/{RUN}"
@@ -218,8 +366,8 @@ class GCPCleanupAdapterTests(unittest.TestCase):
 
         with self.assertRaisesRegex(CleanupAdapterError, "no qualified cleanup mapping"):
             adapter(FakeTransport([])).submit(
-                "delete", "gcp.storage.object",
-                f"gs://{RUN}-bucket/object@12345", {},
+                "delete", "gcp.storage.bucket",
+                f"projects/{PROJECT}/buckets/{RUN}-bucket", {},
             )
 
     def test_create_and_cross_project_delete_are_rejected_without_requests(self):

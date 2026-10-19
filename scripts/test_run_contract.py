@@ -573,6 +573,37 @@ class ManifestTests(unittest.TestCase):
         candidate["resources"][0]["ownership_proof"] = "project_search"
         with self.assertRaises(ContractError):
             validate_manifest(candidate)
+
+    def test_storage_object_id_binds_run_project_bucket_name_and_generation(self):
+        candidate = self.manifest()
+        object_id = (
+            f"projects/{PROJECT}/buckets/{RUN_ID}-objects/objects/"
+            "reports%2Fgolden.json@123"
+        )
+        candidate["resources"].append({
+            "type": "gcp.storage.object",
+            "id": object_id,
+            "ownership_proof": "run_name",
+            "status": "present",
+            "delete_attempts": 0,
+        })
+        self.assertIn(object_id, {
+            item["id"] for item in validate_manifest(candidate)["resources"]
+        })
+
+        candidate["resources"][-1]["id"] = (
+            f"projects/other-lab-456/buckets/{RUN_ID}-objects/objects/"
+            "reports%2Fgolden.json@123"
+        )
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
+
+        candidate["resources"][-1]["id"] = (
+            f"projects/{PROJECT}/buckets/{RUN_ID}-objects/objects/"
+            "reports%2fgolden.json@123"
+        )
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
         candidate = self.manifest()
         candidate["resources"][0]["delete_attempts"] = True
         with self.assertRaises(ContractError):
