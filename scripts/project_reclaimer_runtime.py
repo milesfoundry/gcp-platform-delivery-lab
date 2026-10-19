@@ -12,7 +12,7 @@ from typing import Callable
 
 from gcp_cleanup_adapter import TokenSource, Transport
 from gcp_project_lifecycle_adapter import GCPProjectLifecycleAdapter
-from gcp_token_identity import IdentityTransport
+from gcp_token_identity import CloudRunServiceAccountTokenSource, IdentityTransport
 from recovery_controller import RecoveryController
 from run_ledger import GcsObjectStore, RunLedger
 
@@ -28,6 +28,7 @@ class ProjectReclaimerConfig:
     enabled_services: tuple[str, ...]
     expected_email: str
     expected_auditor_id: str
+    identity_audience: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,10 +43,10 @@ def build_project_reclaimer_runtime(
     *,
     token_source: TokenSource,
     transport: Transport,
-    identity_transport: IdentityTransport,
+    identity_transport: IdentityTransport | None,
     clock: Callable | None = None,
 ) -> ProjectReclaimerRuntime:
-    """Wire provider and GCS ledger requests to one token and human identity."""
+    """Wire provider and GCS ledger requests to one principal-bound token source."""
     store = GcsObjectStore(
         config.ledger_bucket_name,
         project_id=config.ledger_project_id,
@@ -65,6 +66,7 @@ def build_project_reclaimer_runtime(
         enabled_services=list(config.enabled_services),
         identity_transport=identity_transport,
         project_reclaimer_email=config.expected_email,
+        project_reclaimer_auditor_id=config.expected_auditor_id,
     )
     controller = RecoveryController(ledger, provider, clock=clock)
     return ProjectReclaimerRuntime(
@@ -72,3 +74,38 @@ def build_project_reclaimer_runtime(
         ledger=ledger,
         provider=provider,
     )
+
+
+def build_cloud_run_project_reclaimer_runtime(
+    config: ProjectReclaimerConfig,
+    *,
+    transport: Transport,
+    request,
+    clock: Callable | None = None,
+) -> ProjectReclaimerRuntime:
+    """Build the scheduled runtime from Cloud Run's explicit metadata identity."""
+    if config.identity_audience is None:
+        raise ValueError("a fixed Cloud Run identity-token audience is required")
+    token_source = CloudRunServiceAccountTokenSource.from_metadata_server(
+        request=request,
+        expected_email=config.expected_email,
+        expected_subject=_service_account_subject(config.expected_auditor_id),
+        audience=config.identity_audience,
+    )
+    return build_project_reclaimer_runtime(
+        config,
+        token_source=token_source,
+        transport=transport,
+        identity_transport=None,
+        clock=clock,
+    )
+
+
+def _service_account_subject(auditor_id: str) -> str:
+    prefix = "google-service-account-"
+    if not isinstance(auditor_id, str) or not auditor_id.startswith(prefix):
+        raise ValueError("scheduled reclaimer must use a service-account principal ID")
+    subject = auditor_id.removeprefix(prefix)
+    if not subject.isdigit():
+        raise ValueError("service-account principal ID must end in its numeric subject")
+    return subject

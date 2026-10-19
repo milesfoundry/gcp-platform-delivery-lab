@@ -3,6 +3,7 @@
 import unittest
 
 from gcp_token_identity import (
+    CloudRunServiceAccountTokenSource,
     ExplicitGoogleCredentialTokenSource,
     IdentityVerificationError,
     USERINFO_URL,
@@ -43,6 +44,136 @@ def user_info(**overrides):
 
 
 class GoogleTokenIdentityTests(unittest.TestCase):
+    def test_cloud_run_source_binds_api_token_to_verified_service_account_id(self):
+        now = 4_000_000_000
+
+        class AccessCredentials:
+            service_account_email = "janitor@recovery-project.iam.gserviceaccount.com"
+            token = None
+
+            def refresh(self, request):
+                self.token = "cloud-run-api-token"
+
+        class IdentityCredentials:
+            token = None
+
+            def refresh(self, request):
+                self.token = "cloud-run-identity-token"
+
+        claims = {
+            "iss": "https://accounts.google.com",
+            "aud": "portfolio-reclaimer-v1",
+            "email": "janitor@recovery-project.iam.gserviceaccount.com",
+            "email_verified": True,
+            "sub": "12345678901234567890",
+            "azp": "12345678901234567890",
+            "exp": now + 60,
+        }
+        verified = []
+
+        def verify(token, request, audience):
+            verified.append((token, request, audience))
+            return dict(claims)
+
+        request = object()
+        source = CloudRunServiceAccountTokenSource(
+            request=request,
+            access_credentials=AccessCredentials(),
+            identity_credentials=IdentityCredentials(),
+            verify_identity_token=verify,
+            expected_email="janitor@recovery-project.iam.gserviceaccount.com",
+            expected_subject="12345678901234567890",
+            audience="portfolio-reclaimer-v1",
+        )
+        token = source.access_token()
+        self.assertEqual(token, "cloud-run-api-token")
+        principal = source.verify_principal(token)
+        self.assertEqual(principal.email, "janitor@recovery-project.iam.gserviceaccount.com")
+        self.assertEqual(principal.auditor_id, "google-service-account-12345678901234567890")
+        self.assertEqual(verified, [("cloud-run-identity-token", request, "portfolio-reclaimer-v1")])
+        with self.assertRaisesRegex(IdentityVerificationError, "does not match"):
+            source.verify_principal("different-api-token")
+
+    def test_cloud_run_source_rejects_wrong_service_account_claims_and_access_identity(self):
+        now = 4_000_000_000
+        expected_email = "janitor@recovery-project.iam.gserviceaccount.com"
+        base_claims = {
+            "iss": "https://accounts.google.com",
+            "aud": "portfolio-reclaimer-v1",
+            "email": expected_email,
+            "email_verified": True,
+            "sub": "12345678901234567890",
+            "azp": "12345678901234567890",
+            "exp": now + 60,
+        }
+
+        class Credentials:
+            def __init__(self, email=expected_email):
+                self.service_account_email = email
+                self.token = None
+
+            def refresh(self, request):
+                self.token = "test-token"
+
+        class IdentityCredentials:
+            token = "identity-token"
+
+            def refresh(self, request):
+                pass
+
+        invalid_claims = (
+            {"aud": "other"},
+            {"iss": "https://evil.example"},
+            {"email": "other@example.com"},
+            {"email_verified": False},
+            {"sub": "999"},
+            {"azp": "999"},
+            {"exp": 1},
+        )
+        for override in invalid_claims:
+            with self.subTest(override=override):
+                claims = dict(base_claims)
+                claims.update(override)
+                source = CloudRunServiceAccountTokenSource(
+                    request=object(),
+                    access_credentials=Credentials(),
+                    identity_credentials=IdentityCredentials(),
+                    verify_identity_token=lambda token, request, audience: claims,
+                    expected_email=expected_email,
+                    expected_subject="12345678901234567890",
+                    audience="portfolio-reclaimer-v1",
+                )
+                with self.assertRaises(IdentityVerificationError):
+                    source.access_token()
+
+        source = CloudRunServiceAccountTokenSource(
+            request=object(),
+            access_credentials=Credentials("other@recovery-project.iam.gserviceaccount.com"),
+            identity_credentials=IdentityCredentials(),
+            verify_identity_token=lambda token, request, audience: base_claims,
+            expected_email=expected_email,
+            expected_subject="12345678901234567890",
+            audience="portfolio-reclaimer-v1",
+        )
+        with self.assertRaisesRegex(IdentityVerificationError, "wrong service account"):
+            source.access_token()
+
+        def reject_signature(token, request, audience):
+            raise RuntimeError("sensitive signature verifier detail")
+
+        invalid_signature_source = CloudRunServiceAccountTokenSource(
+            request=object(),
+            access_credentials=Credentials(),
+            identity_credentials=IdentityCredentials(),
+            verify_identity_token=reject_signature,
+            expected_email=expected_email,
+            expected_subject="12345678901234567890",
+            audience="portfolio-reclaimer-v1",
+        )
+        with self.assertRaises(IdentityVerificationError) as raised:
+            invalid_signature_source.access_token()
+        self.assertNotIn("sensitive signature verifier detail", str(raised.exception))
+
     def test_explicit_credential_source_refreshes_without_ambient_discovery(self):
         class Credentials:
             def __init__(self):

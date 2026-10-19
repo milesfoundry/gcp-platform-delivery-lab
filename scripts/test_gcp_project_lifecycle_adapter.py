@@ -12,6 +12,7 @@ from gcp_project_lifecycle_adapter import (
     GCPProjectLifecycleAdapter,
     ProjectLifecycleError,
 )
+from gcp_token_identity import VerifiedGoogleUser
 
 
 PROJECT = "sample-lab-123"
@@ -26,6 +27,24 @@ RECLAIMER_EMAIL = "project-reclaimer@example.com"
 class FakeTokenSource:
     def access_token(self):
         return TOKEN
+
+
+class FakeServiceAccountTokenSource:
+    def __init__(self, principal_id="google-service-account-12345678901234567890"):
+        self.principal = VerifiedGoogleUser(
+            auditor_id=principal_id,
+            email="janitor@recovery-project.iam.gserviceaccount.com",
+        )
+        self.verified_tokens = []
+
+    def access_token(self):
+        return "cloud-run-access-token"
+
+    def verify_principal(self, token):
+        self.verified_tokens.append(token)
+        if token != "cloud-run-access-token":
+            raise RuntimeError("unexpected token")
+        return self.principal
 
 
 class FakeResponse:
@@ -405,6 +424,44 @@ class GCPProjectLifecycleAdapterTests(unittest.TestCase):
         self.assertEqual(actor.email, RECLAIMER_EMAIL)
         self.assertEqual(actor.auditor_id, "google-user-12345678901234567890")
         self.assertEqual(len(identity.calls), 1)
+
+    def test_per_run_janitor_lease_requires_matching_service_account_principal(self):
+        source = FakeServiceAccountTokenSource()
+        provider = GCPProjectLifecycleAdapter(
+            FakeTransport([]),
+            source,
+            project_id=PROJECT,
+            run_id=RUN,
+            parent=PARENT,
+            billing_account_name=BILLING,
+            enabled_services=[API],
+            project_reclaimer_email="janitor@recovery-project.iam.gserviceaccount.com",
+            project_reclaimer_auditor_id="google-service-account-12345678901234567890",
+        )
+        actor = provider.authorize_actor(
+            "janitor:google-service-account-12345678901234567890",
+            "delete",
+            PROJECT_TYPE,
+        )
+        self.assertEqual(actor.auditor_id, "google-service-account-12345678901234567890")
+        self.assertEqual(source.verified_tokens, ["cloud-run-access-token"])
+        with self.assertRaisesRegex(ProjectLifecycleError, "does not match"):
+            provider.authorize_actor(
+                "janitor:google-service-account-99999999999999999999",
+                "delete",
+                PROJECT_TYPE,
+            )
+
+        source.principal = VerifiedGoogleUser(
+            auditor_id="google-service-account-99999999999999999999",
+            email="janitor@recovery-project.iam.gserviceaccount.com",
+        )
+        with self.assertRaisesRegex(ProjectLifecycleError, "configured principal"):
+            provider.authorize_actor(
+                "janitor:google-service-account-99999999999999999999",
+                "delete",
+                PROJECT_TYPE,
+            )
 
     def test_project_reclaimer_subject_cannot_change_between_retirement_calls(self):
         identity = FakeIdentityTransport()

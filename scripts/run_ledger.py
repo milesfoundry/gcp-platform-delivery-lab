@@ -25,10 +25,12 @@ from run_contract import (
     DELETE_ORDER,
     MAX_RUN_LIFETIME,
     MAX_OPERATION_ATTEMPTS,
+    RETIREMENT_PRINCIPAL_ID,
     RUN_ID,
     _audit_summary,
     next_state,
     operation_id,
+    retirement_lease_matches_principal,
     validate_intent,
     validate_manifest,
 )
@@ -39,7 +41,7 @@ MAX_EVENTS = 1024
 MAX_LEASE = timedelta(minutes=5)
 MIN_LEASE = timedelta(seconds=15)
 OWNER = re.compile(
-    r"^(?:launcher|reaper|operator:[a-z0-9._-]{1,64}|auditor:"
+    r"^(?:launcher|reaper|operator:[a-z0-9._-]{1,64}|janitor:google-service-account-[0-9]{1,30}|auditor:"
     r"google-user-[A-Za-z0-9._~-]{1,255})$"
 )
 EVENT_TYPES = frozenset(
@@ -655,6 +657,7 @@ class RunLedger:
                 "gcp.resourcemanager.project",
             }
             and lease_owner != "operator:project-reclaimer"
+            and not re.fullmatch(r"janitor:google-service-account-[0-9]{1,30}", lease_owner)
         ):
             raise LedgerConflict(
                 "project retirement requires the named project-reclaimer lease"
@@ -684,10 +687,11 @@ class RunLedger:
             )
             if is_retirement_intent and (
                 not isinstance(actor_id, str)
-                or re.fullmatch(r"google-user-[A-Za-z0-9._~-]{1,255}", actor_id) is None
+                or RETIREMENT_PRINCIPAL_ID.fullmatch(actor_id) is None
+                or not retirement_lease_matches_principal(lease_owner, actor_id)
             ):
                 raise LedgerConflict(
-                    "project retirement operation requires a verified Google user subject"
+                    "project retirement lease must match its verified Google principal"
                 )
             if not is_retirement_intent and actor_id is not None:
                 raise LedgerConflict("this provider operation does not accept an actor identity")
@@ -704,10 +708,11 @@ class RunLedger:
         )
         if retiring_delete and (
             not isinstance(actor_id, str)
-            or re.fullmatch(r"google-user-[A-Za-z0-9._~-]{1,255}", actor_id) is None
+            or RETIREMENT_PRINCIPAL_ID.fullmatch(actor_id) is None
+            or not retirement_lease_matches_principal(lease_owner, actor_id)
         ):
             raise LedgerConflict(
-                "project retirement operation requires a verified Google user subject"
+                "project retirement lease must match its verified Google principal"
             )
         if not retiring_delete and actor_id is not None:
             raise LedgerConflict("this provider operation does not accept an actor identity")
@@ -1240,9 +1245,9 @@ class GcsObjectStore:
         *,
         project_id: str,
         token_source: AccessTokenSource,
-        identity_transport: IdentityTransport,
-        expected_email: str,
-        expected_auditor_id: str,
+        identity_transport: IdentityTransport | None = None,
+        expected_email: str | None = None,
+        expected_auditor_id: str | None = None,
     ):
         if not isinstance(bucket_name, str) or not bucket_name:
             raise ValueError("bucket_name must be non-empty")
@@ -1251,8 +1256,11 @@ class GcsObjectStore:
             or re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", project_id) is None
         ):
             raise ValueError("project_id must be a canonical GCP project ID")
-        if token_source is None or identity_transport is None:
-            raise ValueError("explicit token and identity transports are required")
+        if token_source is None or (
+            identity_transport is None
+            and not callable(getattr(token_source, "verify_principal", None))
+        ):
+            raise ValueError("an explicitly principal-bound token source is required")
         try:
             from google.api_core.exceptions import NotFound, PreconditionFailed
             from google.cloud import storage

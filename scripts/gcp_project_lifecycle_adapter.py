@@ -69,6 +69,7 @@ class GCPProjectLifecycleAdapter:
         enabled_services: list[str],
         identity_transport: IdentityTransport | None = None,
         project_reclaimer_email: str | None = None,
+        project_reclaimer_auditor_id: str | None = None,
         timeout: int = 30,
     ):
         if (
@@ -95,14 +96,18 @@ class GCPProjectLifecycleAdapter:
             raise ValueError("enabled services must be a sorted unique API allowlist")
         if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 60:
             raise ValueError("timeout must be between 1 and 60 seconds")
-        if (identity_transport is None) != (project_reclaimer_email is None):
+        source_binds_principal = callable(getattr(token_source, "verify_principal", None))
+        if not source_binds_principal and (identity_transport is None) != (project_reclaimer_email is None):
             raise ValueError(
                 "project reclaimer identity transport and email must be configured together"
             )
+        if project_reclaimer_auditor_id is not None and not isinstance(project_reclaimer_auditor_id, str):
+            raise ValueError("project reclaimer principal ID must be a string")
         self._transport = transport
         self._token_source = token_source
         self._identity_transport = identity_transport
         self._project_reclaimer_email = project_reclaimer_email
+        self._project_reclaimer_auditor_id = project_reclaimer_auditor_id
         self._project_reclaimer_subject = None
         self._project_id = project_id
         self._run_id = run_id
@@ -116,15 +121,26 @@ class GCPProjectLifecycleAdapter:
         return f"projects/{self._project_id}"
 
     def authorize_actor(self, lease_owner, action, resource_type) -> VerifiedGoogleUser | None:
-        """Bind retirement lease use to its configured, verified Google user."""
+        """Bind retirement lease use to its configured, verified principal."""
         if action != "delete" or resource_type not in {PROJECT_TYPE, BILLING_TYPE}:
             return None
-        if lease_owner != "operator:project-reclaimer":
+        if lease_owner != "operator:project-reclaimer" and not re.fullmatch(
+            r"janitor:google-service-account-[0-9]{1,30}",
+            lease_owner if isinstance(lease_owner, str) else "",
+        ):
             raise ProjectLifecycleError(
-                "project retirement requires the named project-reclaimer lease"
+                "project retirement requires the named project-reclaimer lease or per-run janitor lease"
             )
         token = self._access_token()
-        return self._verify_project_reclaimer(token)
+        principal = self._verify_project_reclaimer(token)
+        if lease_owner == "operator:project-reclaimer":
+            if not principal.auditor_id.startswith("google-user-"):
+                raise ProjectLifecycleError("human project-reclaimer lease requires a verified Google user")
+        elif lease_owner != f"janitor:{principal.auditor_id}" or not principal.auditor_id.startswith(
+            "google-service-account-"
+        ):
+            raise ProjectLifecycleError("janitor lease does not match its verified service-account principal")
+        return principal
 
     def submit(self, action, resource_type, resource_id, request) -> ProviderReceipt:
         if not isinstance(request, dict):
@@ -561,23 +577,33 @@ class GCPProjectLifecycleAdapter:
         return token
 
     def _verify_project_reclaimer(self, token: str) -> VerifiedGoogleUser:
-        if (
-            self._identity_transport is None
-            or self._project_reclaimer_email is None
+        source_verifier = getattr(self._token_source, "verify_principal", None)
+        if not callable(source_verifier) and (
+            self._identity_transport is None or self._project_reclaimer_email is None
         ):
             raise ProjectLifecycleError(
                 "project-reclaimer principal verification is not configured"
             )
         try:
-            principal = verify_access_token_principal(
-                self._identity_transport,
-                token,
-                expected_email=self._project_reclaimer_email,
-            )
+            if callable(source_verifier):
+                principal = source_verifier(token)
+            else:
+                principal = verify_access_token_principal(
+                    self._identity_transport,
+                    token,
+                    expected_email=self._project_reclaimer_email,
+                )
         except IdentityVerificationError:
             raise ProjectLifecycleError(
                 "project-reclaimer Google principal could not be verified"
             ) from None
+        if self._project_reclaimer_email is not None and principal.email != self._project_reclaimer_email:
+            raise ProjectLifecycleError("project-reclaimer email does not match configured principal")
+        if (
+            self._project_reclaimer_auditor_id is not None
+            and principal.auditor_id != self._project_reclaimer_auditor_id
+        ):
+            raise ProjectLifecycleError("project-reclaimer subject does not match configured principal")
         if (
             self._project_reclaimer_subject is not None
             and principal.auditor_id != self._project_reclaimer_subject

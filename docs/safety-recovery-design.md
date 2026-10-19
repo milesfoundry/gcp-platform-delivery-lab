@@ -276,18 +276,15 @@ poller keeps the operation unresolved while Resource Manager reports
 `DELETE_REQUESTED`; it resolves only after exact project lookup returns 404.
 Recovery-control reclamation is gated on that reconciled absence, and final
 closure still requires a separate complete project/billing/budget/control audit.
-The controller requires the named `operator:project-reclaimer` lease and asks
-the project lifecycle adapter to verify that caller's Google user token through
-UserInfo. The verified `sub` is recorded in the operation intent, and every
-teardown API request rechecks the configured expected email before using its
-bearer token. Only human user tokens with verified email are supported. The
-GCS ledger adapter now requires an explicit recovery project ID and token
-source, expected email and stable Google subject, and verifies them before
-every storage API request. This prevents client-side ADC/project discovery.
-`scripts/project_reclaimer_runtime.py` assembles the ledger, provider adapter
-and controller with that same token source and identity transport. The
-credential-source launcher and deployed runtime remain unqualified. This path
-is fake-tested source, not authorized or qualified for live use. For cost
+The manual operator lane uses the named `operator:project-reclaimer` lease and
+verifies its Google user token through UserInfo. The scheduled Cloud Run lane
+now has a separate source-level runtime factory and verifies its per-run
+service-account ID token against the API access token. Both lanes record their
+verified principal on the retirement intents, and the ledger contract requires
+the same principal across billing unlink and project deletion. The GCS adapter
+accepts either source only when each request is bound to the configured email
+and principal ID; the Cloud Run source constructs explicit metadata-server
+credentials without ADC lookup. Neither lane is deployed or live-qualified. For cost
 monitoring, the Budget API can scope an alerts-only budget to one project under
 the billing account, while Google recommends keeping
 programmatic budget-notification topics in a FinOps administration project.
@@ -317,13 +314,22 @@ ledger lease identity for the job, while preserving `operator:project-reclaimer`
 for the human recovery path. Never put a user refresh token in the Job or
 Scheduler configuration.
 
-This is the required implementation contract, not an implemented or qualified
-identity path. Its adapter tests must cover wrong audience, issuer, email,
-numeric subject, signature/expiry failure, access-token refresh failure and
-principal changes between API requests. Deployment must also prove that each
-job can access only its own ledger record and exact run project. Cloud Run
-service identity, token verification, IAM isolation and the independent janitor
-remain unimplemented and unqualified.
+`CloudRunServiceAccountTokenSource` and
+`build_cloud_run_project_reclaimer_runtime()` now implement the source path.
+They construct explicit metadata-server access and ID-token credentials, verify
+the ID token's signature/audience/issuer/expiry/email/numeric subject, and bind
+that proof to the access token from the same default service identity. The GCS
+credential wrapper and project lifecycle adapter accept that verified principal.
+Retirement leases now distinguish `operator:project-reclaimer` with a human
+user from `janitor:google-service-account-{numeric-sub}` with the exact service
+account; operation records and the manifest contract preserve one principal
+across billing unlink and project deletion. Fake tests cover wrong audience,
+issuer, email, numeric subject, expiry, access-token mismatch, refresh failure,
+principal change, and lease/principal mismatch. The Google signature verifier
+itself and metadata server have not been exercised in Cloud Run. Deployment
+must still prove that each job can access only its own ledger record and exact
+run project. IAM isolation and the independent janitor remain unimplemented and
+unqualified.
 
 This follows Google's documented [Cloud Run service identity](https://docs.cloud.google.com/run/docs/securing/service-identity)
 and [service-account ID token claims](https://docs.cloud.google.com/docs/authentication/token-types).
@@ -624,11 +630,11 @@ Required manifest fields:
   configured billing account, API enablement from the manifest allowlist, and
   project deletion. Teardown enters `project_retiring` only after the passed
   workload audit and empty workload inventory. The ledger requires a successful
-  billing unlink before it accepts a project-delete intent; only the named
-  project-reclaimer lease can record those operations, after its Google user
-  token is verified against the configured expected email. The stable user
-  subject is retained on the operation intent, and the same identity check runs
-  on every project-retirement API call. Project deletion stays
+  billing unlink before it accepts a project-delete intent. Either the manual
+  `operator:project-reclaimer` lease with its verified human user or the exact
+  per-run `janitor:google-service-account-{numeric-sub}` lease may record those
+  operations. The stable principal ID is retained on the operation intent, and
+  the same identity check runs on every project-retirement API call. Project deletion stays
   `running` while the exact project is `DELETE_REQUESTED` and resolves only on
   exact 404. The transition to `controls_reclaiming` requires resolved billing
   unlink and project deletion; `closed` still requires the independent full

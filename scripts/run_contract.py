@@ -31,6 +31,9 @@ CRC32C = re.compile(r"^[A-Za-z0-9+/]{6}==$")
 BILLING_ACCOUNT = re.compile(
     r"^billingAccounts/[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}$"
 )
+RETIREMENT_PRINCIPAL_ID = re.compile(
+    r"^(?:google-user-[A-Za-z0-9._~-]{1,255}|google-service-account-[0-9]{1,30})$"
+)
 
 REGION = "europe-west2"
 ZONES = frozenset(
@@ -130,6 +133,23 @@ REGIONAL_RESOURCE_TYPES = frozenset(
 
 class ContractError(ValueError):
     """An intent or manifest violates the reviewed cleanup contract."""
+
+
+def retirement_lease_matches_principal(lease_owner: str, principal_id: str) -> bool:
+    """Bind human and per-run janitor lease names to a verified principal ID."""
+    if lease_owner == "operator:project-reclaimer":
+        return (
+            isinstance(principal_id, str)
+            and principal_id.startswith("google-user-")
+        )
+    prefix = "janitor:"
+    return (
+        isinstance(lease_owner, str)
+        and lease_owner.startswith(prefix)
+        and isinstance(principal_id, str)
+        and principal_id.startswith("google-service-account-")
+        and lease_owner[len(prefix):] == principal_id
+    )
 
 
 def _mapping(value: object, field: str) -> dict:
@@ -649,6 +669,7 @@ def _validate_operations(
     latest_attempt = {}
     pending_target = set()
     previous_at = None
+    retirement_actor_id = None
     for index, event in enumerate(operations, start=1):
         event = _mapping(event, f"operations[{index - 1}]")
         sequence = event.get("sequence")
@@ -698,11 +719,18 @@ def _validate_operations(
             actor_id = event.get("actor_id")
             if retiring_delete and (
                 not isinstance(actor_id, str)
-                or re.fullmatch(r"google-user-[A-Za-z0-9._~-]{1,255}", actor_id) is None
+                or RETIREMENT_PRINCIPAL_ID.fullmatch(actor_id) is None
             ):
                 raise ContractError(
-                    "project retirement operation requires a verified Google user subject"
+                    "project retirement operation requires a verified Google principal ID"
                 )
+            if retiring_delete:
+                if retirement_actor_id is None:
+                    retirement_actor_id = actor_id
+                elif actor_id != retirement_actor_id:
+                    raise ContractError(
+                        "project retirement operations must retain the same verified Google principal"
+                    )
             if not retiring_delete and "actor_id" in event:
                 raise ContractError("actor_id is unsupported for this provider operation")
             target = (action, resource_type, resource_id)

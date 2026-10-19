@@ -13,6 +13,7 @@ from run_contract import (
     control_cleanup_plan,
     next_state,
     operation_id,
+    retirement_lease_matches_principal,
     validate_intent,
     validate_manifest,
 )
@@ -178,6 +179,39 @@ def retirement_operations():
             "at": f"2026-10-18T12:0{attempt}:01Z",
         })
     return operations
+
+
+class RetirementPrincipalLeaseTests(unittest.TestCase):
+    def test_human_and_service_account_leases_bind_only_matching_principal_types(self):
+        self.assertTrue(
+            retirement_lease_matches_principal(
+                "operator:project-reclaimer", "google-user-12345678901234567890"
+            )
+        )
+        self.assertTrue(
+            retirement_lease_matches_principal(
+                "janitor:google-service-account-12345678901234567890",
+                "google-service-account-12345678901234567890",
+            )
+        )
+        self.assertFalse(
+            retirement_lease_matches_principal(
+                "operator:project-reclaimer",
+                "google-service-account-12345678901234567890",
+            )
+        )
+        self.assertFalse(
+            retirement_lease_matches_principal(
+                "janitor:google-service-account-12345678901234567890",
+                "google-service-account-99999999999999999999",
+            )
+        )
+        self.assertFalse(
+            retirement_lease_matches_principal(
+                "janitor:google-service-account-12345678901234567890",
+                "google-user-12345678901234567890",
+            )
+        )
 
 
 class RunIntentTests(unittest.TestCase):
@@ -802,6 +836,19 @@ class ManifestTests(unittest.TestCase):
             event["at"] = f"2026-10-18T12:0{index}:00Z"
         candidate["operations"] = reordered
         with self.assertRaisesRegex(ContractError, "prior successful billing unlink"):
+            validate_manifest(candidate)
+
+    def test_project_retirement_operations_keep_the_same_verified_principal(self):
+        candidate = intent()
+        candidate["state"] = "project_retiring"
+        receipt = audit_receipt(1, "workload")
+        candidate["audit_receipts"] = [receipt]
+        candidate["independent_audit"] = _audit_summary(receipt)
+        candidate["operations"] = retirement_operations()
+        candidate["operations"][2]["actor_id"] = (
+            "google-service-account-12345678901234567890"
+        )
+        with self.assertRaisesRegex(ContractError, "same verified Google principal"):
             validate_manifest(candidate)
 
 

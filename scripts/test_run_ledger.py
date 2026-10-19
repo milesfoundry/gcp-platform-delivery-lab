@@ -9,7 +9,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from gcp_token_identity import IdentityVerificationError
+from gcp_token_identity import IdentityVerificationError, VerifiedGoogleUser
 from run_contract import ContractError, _audit_summary, operation_id
 from recovery_controller import ProviderReceipt, RecoveryController
 from run_ledger import (
@@ -880,6 +880,71 @@ class RunLedgerTests(unittest.TestCase):
                 **{**arguments, "checks": {"resources_absent": True}},
             )
 
+    def test_janitor_lease_records_retirement_only_for_its_service_account(self):
+        snapshot = self.lease_in_auditing()
+        workload = self.ledger.record_independent_audit(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            lease_owner="auditor:google-user-12345678901234567890",
+            auditor_id="google-user-12345678901234567890",
+            phase="workload",
+            result="passed",
+            complete=True,
+            inventory_sha256="a" * 64,
+            evidence_sha256="b" * 64,
+            checks={"resource_inventory_complete": True, "resources_absent": True},
+            now=self.now + timedelta(seconds=32),
+        )
+        workload = self.ledger.release_lease(
+            RUN_ID,
+            expected_generation=workload.generation,
+            owner="auditor:google-user-12345678901234567890",
+            now=self.now + timedelta(seconds=33),
+        )
+        principal_id = "google-service-account-12345678901234567890"
+        lease_owner = f"janitor:{principal_id}"
+        janitor = self.ledger.acquire_lease(
+            RUN_ID,
+            expected_generation=workload.generation,
+            owner=lease_owner,
+            now=self.now + timedelta(seconds=34),
+        )
+        candidate = deepcopy(janitor.manifest)
+        candidate["state"] = "project_retiring"
+        janitor = self.ledger.replace(
+            RUN_ID,
+            expected_generation=janitor.generation,
+            lease_owner=lease_owner,
+            manifest=candidate,
+            now=self.now + timedelta(seconds=35),
+        )
+        with self.assertRaisesRegex(LedgerConflict, "verified Google principal"):
+            self.ledger.record_operation_intent(
+                RUN_ID,
+                expected_generation=janitor.generation,
+                lease_owner=lease_owner,
+                attempt=1,
+                action="delete",
+                resource_type="gcp.billing.project_billing_info",
+                resource_id=f"projects/{self.intent['scope']['project_id']}",
+                request_sha256="a" * 64,
+                actor_id="google-user-12345678901234567890",
+                now=self.now + timedelta(seconds=36),
+            )
+        recorded = self.ledger.record_operation_intent(
+            RUN_ID,
+            expected_generation=janitor.generation,
+            lease_owner=lease_owner,
+            attempt=1,
+            action="delete",
+            resource_type="gcp.billing.project_billing_info",
+            resource_id=f"projects/{self.intent['scope']['project_id']}",
+            request_sha256="a" * 64,
+            actor_id=principal_id,
+            now=self.now + timedelta(seconds=36),
+        )
+        self.assertEqual(recorded.manifest["operations"][-1]["actor_id"], principal_id)
+
     def test_closure_receipt_requires_passed_workload_audit_and_precedes_closed(self):
         snapshot = self.lease_in_auditing()
         workload = self.ledger.record_independent_audit(
@@ -994,7 +1059,7 @@ class RunLedgerTests(unittest.TestCase):
         self.assertEqual(billing.state, "succeeded")
         retirement_provider.actor_id = "google-user-98765432109876543210"
         calls_before_principal_change = retirement_provider.submit_calls
-        with self.assertRaisesRegex(LedgerConflict, "same verified Google user"):
+        with self.assertRaisesRegex(LedgerConflict, "same verified Google principal"):
             controller.execute(
                 RUN_ID,
                 lease_owner="operator:project-reclaimer",
@@ -1455,6 +1520,33 @@ class RunLedgerTests(unittest.TestCase):
                 client_holder["client"].credentials.before_request(
                     None, "POST", "https://storage.googleapis.com/", headers
                 )
+
+            class CloudRunTokenSource:
+                def access_token(self):
+                    return "cloud-run-api-token"
+
+                def verify_principal(self, token):
+                    if token != "cloud-run-api-token":
+                        raise IdentityVerificationError("wrong token")
+                    return VerifiedGoogleUser(
+                        auditor_id="google-service-account-12345678901234567890",
+                        email="janitor@recovery-project.iam.gserviceaccount.com",
+                    )
+
+            cloud_run_adapter = GcsObjectStore(
+                "private-ledger-bucket",
+                project_id="recovery-project-123",
+                token_source=CloudRunTokenSource(),
+                expected_email="janitor@recovery-project.iam.gserviceaccount.com",
+                expected_auditor_id="google-service-account-12345678901234567890",
+            )
+            headers = {}
+            client_holder["client"].credentials.before_request(
+                None, "POST", "https://storage.googleapis.com/", headers
+            )
+            self.assertEqual(
+                headers["Authorization"], "Bearer cloud-run-api-token"
+            )
 
 
 if __name__ == "__main__":

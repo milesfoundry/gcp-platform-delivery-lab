@@ -159,7 +159,7 @@ class RecoveryController:
             }
             if prior_retirement_actors and prior_retirement_actors != {actor_id}:
                 raise LedgerConflict(
-                    "project retirement must use the same verified Google user"
+                    "project retirement must use the same verified Google principal"
                 )
         snapshot = self.ledger.record_operation_intent(
             run_id,

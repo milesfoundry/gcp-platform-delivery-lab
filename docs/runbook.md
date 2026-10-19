@@ -34,25 +34,24 @@ The project lifecycle adapter also supports the separate post-audit project
 reclaimer: billing must be unlinked first, project deletion is journaled, and the
 operation remains unresolved while Resource Manager reports `DELETE_REQUESTED`.
 Recovery controls can be reclaimed only after exact project absence is
-reconciled. The controller requires the named reclaimer lease, verifies the
-Google user token against a configured expected email, and records the stable
-Google subject with each retirement intent. Each retirement API request is
-verified before use. The GCS writer requires an explicit token source, expected
-recovery project ID, email and stable subject, and verifies them before each
-storage request. The `project_reclaimer_runtime.py` factory passes the same
-token source and identity transport to both adapters and the controller. The
-credential-source launcher and deployed runtime remain unqualified; this path
-is fake-tested only.
+reconciled. The manual reclaimer verifies a human Google user token and records
+the stable user subject with each retirement intent. The scheduled Cloud Run
+factory now separately binds the per-run service-account ID token to the API
+access token from the same metadata service identity. The ledger and project
+adapter accept either verified principal under its matching retirement lease.
+The source is fake-tested only: there is no Cloud Run deployment, metadata
+server qualification or IAM isolation proof.
 `ExplicitGoogleCredentialTokenSource` is an optional adapter for a Google auth
 credential explicitly injected by a trusted caller. That caller must configure
 the required Google API scopes plus `openid` and `email` for UserInfo checks.
 The adapter refreshes the injected credential but does not discover credentials,
 select a workload identity, or qualify a deployment.
-This is currently a human-user verification path, not a Cloud Run janitor
-credential path. The scheduled Job needs a distinct per-run service-account
-identity, with both tokens sourced from Cloud Run's metadata service and the
-ID token bound to the same principal as the API access token. See the [required
-principal split](safety-recovery-design.md#reclaimer-principal-split--required-before-deployment).
+This is the human-user verification path. The source-level Cloud Run path now
+constructs a separate per-run service-account identity, sources both tokens
+from Cloud Run's metadata service, and binds the ID-token proof to the API
+access token. It has fake contract coverage but no Cloud Run, metadata, signature
+verification or IAM qualification. See the [required principal
+split](safety-recovery-design.md#reclaimer-principal-split--required-before-deployment).
 `gcp_cleanup_adapter.py` now implements a deletion-only adapter for exact
 Compute network/subnetwork/router/NAT, Pub/Sub topics/subscriptions, GCS objects,
 GKE node-pool/cluster, and GKE Fleet membership/feature resources. It requires an
