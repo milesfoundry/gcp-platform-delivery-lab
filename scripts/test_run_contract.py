@@ -2,10 +2,13 @@
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
+import json
 import unittest
 
 from run_contract import (
     ContractError,
+    _audit_summary,
     cleanup_plan,
     control_cleanup_plan,
     next_state,
@@ -88,6 +91,37 @@ def resource(resource_type, name, *, proof="run_name", status="present"):
         "status": status,
         "delete_attempts": 0,
     }
+
+
+def audit_receipt(sequence, phase, *, checks=None, result="passed", complete=True):
+    if checks is None:
+        checks = (
+            {"resource_inventory_complete": True, "resources_absent": True}
+            if phase == "workload"
+            else {
+                "resource_inventory_complete": True, "resources_absent": True,
+                "project_absent": True, "billing_unlinked": True,
+                "budget_reconciled": True, "recovery_controls_absent": True,
+            }
+        )
+    receipt = {
+        "sequence": sequence,
+        "run_id": RUN_ID,
+        "project_id": PROJECT,
+        "recovery_project_id": "recovery-lab-456",
+        "phase": phase,
+        "result": result,
+        "complete": complete,
+        "auditor_id": "external-auditor",
+        "observed_at": f"2026-10-18T12:{sequence:02}:00Z",
+        "inventory_sha256": "a" * 64,
+        "evidence_sha256": "b" * 64,
+        "manifest_generation": sequence,
+        "checks": checks,
+    }
+    canonical = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    receipt["receipt_id"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return receipt
 
 
 class RunIntentTests(unittest.TestCase):
@@ -365,6 +399,10 @@ class RunIntentTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
         candidate = intent()
+        candidate["audit_receipts"] = [{"fabricated": True}]
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
+        candidate = intent()
         candidate["resources"] = [resource("gcp.gke.cluster", RUN_ID)]
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
@@ -539,28 +577,16 @@ class ManifestTests(unittest.TestCase):
             item["status"] = "deleted"
         for item in candidate["controls"]:
             item["status"] = "deleted"
-        candidate["independent_audit"] = {
-            "result": "passed", "complete": True, "resources_absent": True,
-            "project_absent": True, "billing_unlinked": True,
-            "budget_reconciled": True, "recovery_controls_absent": True,
-        }
+        workload = audit_receipt(1, "workload")
+        closure = audit_receipt(2, "closure")
+        candidate["audit_receipts"] = [workload, closure]
+        candidate["independent_audit"] = _audit_summary(closure)
         self.assertEqual(validate_manifest(candidate)["state"], "closed")
-        for audit in (
-            {
-                "result": "passed", "complete": False, "resources_absent": True,
-                "project_absent": True, "billing_unlinked": True,
-                "budget_reconciled": True, "recovery_controls_absent": True,
-            },
-            {
-                "result": "incomplete", "complete": True, "resources_absent": True,
-                "project_absent": True, "billing_unlinked": True,
-                "budget_reconciled": True, "recovery_controls_absent": True,
-            },
-        ):
-            candidate["independent_audit"] = audit
-            with self.subTest(audit=audit), self.assertRaises(ContractError):
-                validate_manifest(candidate)
-        candidate["independent_audit"] = {"result": "passed", "complete": True}
+        candidate["audit_receipts"][-1]["checks"]["project_absent"] = False
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
+        candidate["audit_receipts"] = [workload]
+        candidate["independent_audit"] = _audit_summary(workload)
         candidate["resources"][0]["status"] = "present"
         with self.assertRaises(ContractError):
             validate_manifest(candidate)
@@ -583,9 +609,9 @@ class ManifestTests(unittest.TestCase):
             control_cleanup_plan(candidate)
         for item in candidate["resources"]:
             item["status"] = "deleted"
-        candidate["independent_audit"] = {
-            "result": "passed", "complete": True, "resources_absent": True,
-        }
+        workload = audit_receipt(1, "workload")
+        candidate["audit_receipts"] = [workload]
+        candidate["independent_audit"] = _audit_summary(workload)
         controls = control_cleanup_plan(candidate)
         self.assertEqual(
             [item["type"] for item in controls],

@@ -2,10 +2,11 @@
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import unittest
 
-from run_contract import ContractError, operation_id
+from run_contract import ContractError, _audit_summary, operation_id
 from run_ledger import (
     GenerationConflict,
     GcsObjectStore,
@@ -155,6 +156,36 @@ class RunLedgerTests(unittest.TestCase):
                 now=self.now + timedelta(seconds=index),
             )
         return snapshot
+
+    def lease_in_auditing(self):
+        snapshot = self.lease_in_provisioning()
+        for index, state in enumerate(
+            ["ready", "teardown_requested", "cleaning", "auditing"], start=20
+        ):
+            candidate = deepcopy(snapshot.manifest)
+            candidate["state"] = state
+            if state == "auditing":
+                for resource in candidate["resources"]:
+                    resource["status"] = "deleted"
+            snapshot = self.ledger.replace(
+                RUN_ID,
+                expected_generation=snapshot.generation,
+                lease_owner="launcher",
+                manifest=candidate,
+                now=self.now + timedelta(seconds=index),
+            )
+        snapshot = self.ledger.release_lease(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            owner="launcher",
+            now=self.now + timedelta(seconds=30),
+        )
+        return self.ledger.acquire_lease(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            owner="auditor:external-auditor",
+            now=self.now + timedelta(seconds=31),
+        )
 
     def test_object_path_is_exact_and_rejects_path_injection(self):
         self.assertEqual(object_name(RUN_ID), f"runs/{RUN_ID}/manifest.json")
@@ -670,6 +701,156 @@ class RunLedgerTests(unittest.TestCase):
                 manifest=erased,
                 now=self.now + timedelta(seconds=2),
             )
+
+    def test_independent_audit_receipt_is_generation_bound_and_append_only(self):
+        snapshot = self.lease_in_auditing()
+        checks = {"resource_inventory_complete": True, "resources_absent": True}
+        audited = self.ledger.record_independent_audit(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            lease_owner="auditor:external-auditor",
+            auditor_id="external-auditor",
+            phase="workload",
+            result="passed",
+            complete=True,
+            inventory_sha256="a" * 64,
+            evidence_sha256="b" * 64,
+            checks=checks,
+            now=self.now + timedelta(seconds=32),
+        )
+        receipt = audited.manifest["audit_receipts"][0]
+        self.assertEqual(receipt["manifest_generation"], snapshot.generation)
+        self.assertEqual(
+            audited.manifest["independent_audit"]["phase"], "workload"
+        )
+        changed = deepcopy(audited.manifest)
+        changed["audit_receipts"][0]["inventory_sha256"] = "c" * 64
+        receipt_payload = {
+            key: value
+            for key, value in changed["audit_receipts"][0].items()
+            if key != "receipt_id"
+        }
+        changed["audit_receipts"][0]["receipt_id"] = hashlib.sha256(
+            json.dumps(receipt_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        changed["independent_audit"] = _audit_summary(changed["audit_receipts"][0])
+        with self.assertRaises(LedgerConflict):
+            self.ledger.replace(
+                RUN_ID,
+                expected_generation=audited.generation,
+                lease_owner="auditor:external-auditor",
+                manifest=changed,
+                now=self.now + timedelta(seconds=33),
+            )
+
+    def test_independent_audit_requires_a_separate_named_lease_and_exact_checks(self):
+        snapshot = self.lease_in_auditing()
+        arguments = {
+            "expected_generation": snapshot.generation,
+            "auditor_id": "external-auditor",
+            "phase": "workload",
+            "result": "passed",
+            "complete": True,
+            "inventory_sha256": "a" * 64,
+            "evidence_sha256": "b" * 64,
+            "checks": {"resource_inventory_complete": True, "resources_absent": True},
+            "now": self.now + timedelta(seconds=32),
+        }
+        with self.assertRaises(LedgerConflict):
+            self.ledger.record_independent_audit(
+                RUN_ID, lease_owner="launcher", **arguments
+            )
+        with self.assertRaises(ContractError):
+            self.ledger.record_independent_audit(
+                RUN_ID,
+                lease_owner="auditor:external-auditor",
+                **{**arguments, "checks": {"resources_absent": True}},
+            )
+
+    def test_closure_receipt_requires_passed_workload_audit_and_precedes_closed(self):
+        snapshot = self.lease_in_auditing()
+        workload = self.ledger.record_independent_audit(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            lease_owner="auditor:external-auditor",
+            auditor_id="external-auditor",
+            phase="workload",
+            result="passed",
+            complete=True,
+            inventory_sha256="a" * 64,
+            evidence_sha256="b" * 64,
+            checks={"resource_inventory_complete": True, "resources_absent": True},
+            now=self.now + timedelta(seconds=32),
+        )
+        workload = self.ledger.release_lease(
+            RUN_ID,
+            expected_generation=workload.generation,
+            owner="auditor:external-auditor",
+            now=self.now + timedelta(seconds=33),
+        )
+        operator = self.ledger.acquire_lease(
+            RUN_ID,
+            expected_generation=workload.generation,
+            owner="operator:reclaimer",
+            now=self.now + timedelta(seconds=34),
+        )
+        candidate = deepcopy(operator.manifest)
+        candidate["state"] = "controls_reclaiming"
+        for control in candidate["controls"]:
+            control["status"] = "deleted"
+        operator = self.ledger.replace(
+            RUN_ID,
+            expected_generation=operator.generation,
+            lease_owner="operator:reclaimer",
+            manifest=candidate,
+            now=self.now + timedelta(seconds=35),
+        )
+        operator = self.ledger.release_lease(
+            RUN_ID,
+            expected_generation=operator.generation,
+            owner="operator:reclaimer",
+            now=self.now + timedelta(seconds=36),
+        )
+        auditor = self.ledger.acquire_lease(
+            RUN_ID,
+            expected_generation=operator.generation,
+            owner="auditor:external-auditor",
+            now=self.now + timedelta(seconds=37),
+        )
+        closure = self.ledger.record_independent_audit(
+            RUN_ID,
+            expected_generation=auditor.generation,
+            lease_owner="auditor:external-auditor",
+            auditor_id="external-auditor",
+            phase="closure",
+            result="passed",
+            complete=True,
+            inventory_sha256="c" * 64,
+            evidence_sha256="d" * 64,
+            checks={
+                "resource_inventory_complete": True,
+                "resources_absent": True,
+                "project_absent": True,
+                "billing_unlinked": True,
+                "budget_reconciled": True,
+                "recovery_controls_absent": True,
+            },
+            now=self.now + timedelta(seconds=38),
+        )
+        candidate = deepcopy(closure.manifest)
+        candidate["state"] = "closed"
+        closed = self.ledger.replace(
+            RUN_ID,
+            expected_generation=closure.generation,
+            lease_owner="auditor:external-auditor",
+            manifest=candidate,
+            now=self.now + timedelta(seconds=39),
+        )
+        self.assertEqual(closed.manifest["state"], "closed")
+        self.assertEqual(
+            [item["phase"] for item in closed.manifest["audit_receipts"]],
+            ["workload", "closure"],
+        )
 
     def test_corrupt_and_duplicate_key_objects_fail_closed(self):
         with self.assertRaises(LedgerError):

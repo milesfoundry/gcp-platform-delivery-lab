@@ -170,6 +170,28 @@ def _only_keys(data: dict, allowed: set[str], field: str) -> None:
         raise ContractError(f"{field} contains unsupported fields: {sorted(extra)}")
 
 
+def _audit_summary(receipt: dict) -> dict:
+    """Return the small manifest projection of the latest immutable audit receipt."""
+    summary = {
+        "result": receipt["result"],
+        "complete": receipt["complete"],
+        "resources_absent": receipt["checks"]["resources_absent"],
+        "phase": receipt["phase"],
+        "auditor_id": receipt["auditor_id"],
+        "observed_at": receipt["observed_at"],
+        "inventory_sha256": receipt["inventory_sha256"],
+        "evidence_sha256": receipt["evidence_sha256"],
+        "manifest_generation": receipt["manifest_generation"],
+    }
+    for key in (
+        "project_absent", "billing_unlinked", "budget_reconciled",
+        "recovery_controls_absent",
+    ):
+        if key in receipt["checks"]:
+            summary[key] = receipt["checks"][key]
+    return summary
+
+
 def operation_id(
     run_id: str,
     attempt: int,
@@ -206,7 +228,7 @@ def validate_intent(
         {
             "schema", "run_id", "scope", "created_at", "deadline_at", "source",
             "finance", "cleanup", "state", "resources", "controls",
-            "independent_audit", "terraform_state", "operations",
+            "independent_audit", "audit_receipts", "terraform_state", "operations",
         },
         "intent",
     )
@@ -375,6 +397,8 @@ def validate_intent(
             raise ContractError("new intent must have an empty workload resource list")
         if data.get("operations") != []:
             raise ContractError("new intent must have an empty provider operation history")
+        if data.get("audit_receipts", []) != [] or data.get("independent_audit") is not None:
+            raise ContractError("new intent cannot contain independent audit results")
     return data
 
 
@@ -850,45 +874,117 @@ def validate_manifest(manifest: object) -> dict:
                     "provider operation target must be predeclared in the exact run inventory"
                 )
 
-    audit = None
-    if "independent_audit" in data:
-        audit = _mapping(data["independent_audit"], "independent_audit")
-        _only_keys(
-            audit,
-            {
-                "result", "complete", "resources_absent", "project_absent",
-                "billing_unlinked", "budget_reconciled", "recovery_controls_absent",
-            },
-            "independent_audit",
-        )
-        if not isinstance(audit.get("result"), str) or audit["result"] not in {
-            "passed", "failed", "incomplete"
-        }:
-            raise ContractError("independent audit result is unsupported")
-        for key in (
-            "complete", "resources_absent", "project_absent", "billing_unlinked",
-            "budget_reconciled", "recovery_controls_absent",
+    receipts = data.get("audit_receipts", [])
+    if not isinstance(receipts, list) or len(receipts) > 64:
+        raise ContractError("audit_receipts must contain at most 64 entries")
+    previous_time = None
+    successful_workload_audit = False
+    receipt_fields = {
+        "sequence", "run_id", "project_id", "recovery_project_id", "phase",
+        "result", "complete", "auditor_id", "observed_at",
+        "inventory_sha256", "evidence_sha256", "manifest_generation", "checks",
+        "receipt_id",
+    }
+    for index, receipt in enumerate(receipts, start=1):
+        receipt = _mapping(receipt, f"audit_receipts[{index - 1}]")
+        _only_keys(receipt, receipt_fields, f"audit_receipts[{index - 1}]")
+        if set(receipt) != receipt_fields:
+            raise ContractError("audit receipt fields are incomplete")
+        if (
+            receipt["run_id"] != data["run_id"]
+            or receipt["project_id"] != data["scope"]["project_id"]
+            or receipt["recovery_project_id"] != data["scope"]["recovery_project_id"]
         ):
-            if key in audit and not isinstance(audit[key], bool):
-                raise ContractError(f"independent audit {key} must be boolean")
+            raise ContractError("audit receipt scope must match its exact run and projects")
+        sequence = receipt["sequence"]
+        if isinstance(sequence, bool) or sequence != index:
+            raise ContractError("audit receipt sequence must be contiguous and monotonic")
+        phase = receipt["phase"]
+        if phase not in {"workload", "closure"}:
+            raise ContractError("audit receipt phase is unsupported")
+        if phase == "closure" and not successful_workload_audit:
+            raise ContractError("closure audit requires a prior passed workload audit")
+        expected_checks = (
+            {"resource_inventory_complete", "resources_absent"}
+            if phase == "workload"
+            else {
+                "resource_inventory_complete", "resources_absent", "project_absent",
+                "billing_unlinked", "budget_reconciled", "recovery_controls_absent",
+            }
+        )
+        checks = _mapping(receipt["checks"], "audit receipt checks")
+        if set(checks) != expected_checks or any(
+            not isinstance(value, bool) for value in checks.values()
+        ):
+            raise ContractError("audit receipt checks do not match its phase")
+        if not isinstance(receipt["complete"], bool):
+            raise ContractError("audit receipt complete must be boolean")
+        result = receipt["result"]
+        if result not in {"passed", "failed", "incomplete"}:
+            raise ContractError("audit receipt result is unsupported")
+        all_checks_passed = all(checks.values())
+        if result == "passed" and (not receipt["complete"] or not all_checks_passed):
+            raise ContractError("passed audit receipt must be complete with all checks passed")
+        if result == "failed" and all_checks_passed:
+            raise ContractError("failed audit receipt must contain a failed check")
+        if result == "incomplete" and receipt["complete"]:
+            raise ContractError("incomplete audit receipt cannot claim complete coverage")
+        auditor_id = receipt["auditor_id"]
+        if not isinstance(auditor_id, str) or re.fullmatch(
+            r"[a-z0-9][a-z0-9._-]{0,63}", auditor_id
+        ) is None:
+            raise ContractError("audit receipt auditor_id is unsupported")
+        observed_at = _timestamp(receipt["observed_at"], "audit receipt observed_at")
+        if previous_time is not None and observed_at < previous_time:
+            raise ContractError("audit receipt timestamps must be monotonic")
+        previous_time = observed_at
+        for field in ("inventory_sha256", "evidence_sha256", "receipt_id"):
+            if not isinstance(receipt[field], str) or not SHA256.fullmatch(receipt[field]):
+                raise ContractError(f"audit receipt {field} must be a SHA-256 hex digest")
+        receipt_payload = {key: value for key, value in receipt.items() if key != "receipt_id"}
+        receipt_canonical = json.dumps(
+            receipt_payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        if hashlib.sha256(receipt_canonical.encode("utf-8")).hexdigest() != receipt[
+            "receipt_id"
+        ]:
+            raise ContractError("audit receipt id does not match its immutable contents")
+        generation = receipt["manifest_generation"]
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+            raise ContractError("audit receipt manifest_generation must be positive")
+        if phase == "workload" and data["state"] not in {
+            "auditing", "cleaning", "incomplete", "controls_reclaiming", "closed"
+        }:
+            raise ContractError("workload audit receipts require an audited lifecycle state")
+        if phase == "closure" and data["state"] not in {"controls_reclaiming", "closed"}:
+            raise ContractError("closure audit receipts require controls_reclaiming state")
+        if phase == "workload" and result == "passed":
+            if any(item["status"] != "deleted" for item in resources):
+                raise ContractError("passed workload audit requires deleted inventory status")
+            successful_workload_audit = True
+        if phase == "closure" and any(
+            item["status"] != "deleted" for item in resources + controls
+        ):
+            raise ContractError("closure audit requires workload and recovery controls deleted")
+
+    audit = data.get("independent_audit")
+    if receipts:
+        expected_summary = _audit_summary(receipts[-1])
+        if audit != expected_summary:
+            raise ContractError("independent_audit must match the latest append-only receipt")
+    elif audit is not None:
+        raise ContractError("independent_audit requires an append-only audit receipt")
 
     if data["state"] == "closed":
         if any(resource["status"] != "deleted" for resource in resources):
             raise ContractError("closed manifest must have no live run resources")
         if any(control["status"] != "deleted" for control in controls):
             raise ContractError("closed manifest requires recovery controls to be reclaimed")
-        if audit is None or audit.get("result") != "passed":
-            raise ContractError("closed manifest requires a passed independent audit")
-        if audit.get("complete") is not True:
-            raise ContractError("closed manifest requires complete audit coverage")
-        required_audit = (
-            "resources_absent", "project_absent", "billing_unlinked",
-            "budget_reconciled", "recovery_controls_absent",
-        )
-        if any(audit.get(key) is not True for key in required_audit):
-            raise ContractError(
-                "closed manifest requires complete resource, project, billing, budget, and control audit"
-            )
+        if (
+            audit is None or audit.get("phase") != "closure"
+            or audit.get("result") != "passed" or audit.get("complete") is not True
+        ):
+            raise ContractError("closed manifest requires a passed closure audit receipt")
     return data
 
 
@@ -937,6 +1033,7 @@ def control_cleanup_plan(manifest: object) -> list[dict]:
         not isinstance(audit, dict)
         or audit.get("result") != "passed"
         or audit.get("complete") is not True
+        or audit.get("phase") != "workload"
         or audit.get("resources_absent") is not True
     ):
         raise ContractError("recovery controls require a complete independent workload audit")

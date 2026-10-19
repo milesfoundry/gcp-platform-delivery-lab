@@ -495,8 +495,15 @@ Required manifest fields:
   `prepared` requires all controls verified present and no workload resources.
 - Per-resource expected type, canonical provider URI, discovery key, dependency
   edges, ownership evidence, first-seen/last-seen time, delete attempts/results,
-  and independent audit result. Never store bearer credentials or sensitive
-  Terraform values.
+  and independent audit result. `audit_receipts` is append-only: each workload
+  or closure receipt records the separately named auditor, observed timestamp,
+  exact pre-write manifest generation, phase-specific checks, and SHA-256
+  fingerprints for the discovered inventory and an external evidence artifact.
+  The compact `independent_audit` field must match the latest receipt. Workload
+  audit and final project/billing/control closure are separate receipts; a
+  closure receipt cannot precede a passed workload receipt. Never store raw
+  provider listings, bearer credentials or sensitive Terraform values in the
+  manifest.
 - Gross cost estimate, measured gross usage, currency, credit balance/expiry
   observation time, net-cash estimate and later billing reconciliation reference.
 - Immutable links/checksums to sanitized evidence and an explicit limitation list.
@@ -607,8 +614,10 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    project creation; finish provider discovery, independent absence audit and
    provider reads/deletes; bind reaper writes to the ledger lease; separate
    project/billing, audit and control-reclamation roles. Ordered cleanup now
-   resumes pending operations, but an append-only audit receipt, full external
-   inventory, billing/project audit and real provider adapter remain open. The
+   resumes pending operations. Append-only generation-bound audit receipts are
+   now part of the ledger contract, but external inventory discovery, billing/
+   project checks, identity-to-auditor authentication and the real provider
+   adapter remain open. The
    ledger fake covers response-loss retries and CAS conflicts; extend
    fake-provider drills for resource loss-after-create, idempotent cleanup and
    cross-run denial before any hosted credentials are added.

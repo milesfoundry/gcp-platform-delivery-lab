@@ -19,6 +19,7 @@ from run_contract import (
     MAX_RUN_LIFETIME,
     MAX_OPERATION_ATTEMPTS,
     RUN_ID,
+    _audit_summary,
     next_state,
     operation_id,
     validate_intent,
@@ -30,7 +31,9 @@ LEDGER_SCHEMA = "portfolio.gcp-ledger.v1"
 MAX_EVENTS = 1024
 MAX_LEASE = timedelta(minutes=5)
 MIN_LEASE = timedelta(seconds=15)
-OWNER = re.compile(r"^(?:launcher|reaper|operator:[a-z0-9._-]{1,64})$")
+OWNER = re.compile(
+    r"^(?:launcher|reaper|operator:[a-z0-9._-]{1,64}|auditor:[a-z0-9._-]{1,64})$"
+)
 EVENT_TYPES = frozenset(
     {
         "run_created",
@@ -42,6 +45,7 @@ EVENT_TYPES = frozenset(
         "operation_intent_recorded",
         "operation_progress_recorded",
         "operation_result_recorded",
+        "audit_receipt_recorded",
     }
 )
 
@@ -468,6 +472,27 @@ class RunLedger:
         new_operations = candidate["operations"]
         if new_operations[:len(old_operations)] != old_operations:
             raise LedgerConflict("provider operation history is append-only")
+        old_audits = current.manifest.get("audit_receipts", [])
+        new_audits = candidate.get("audit_receipts", [])
+        if new_audits[:len(old_audits)] != old_audits:
+            raise LedgerConflict("independent audit receipt history is append-only")
+        if len(new_audits) - len(old_audits) > 1:
+            raise LedgerConflict("one audit receipt may be recorded per ledger transition")
+        audit_delta = len(new_audits) - len(old_audits)
+        if audit_delta == 1:
+            appended = new_audits[-1]
+            if event_type != "audit_receipt_recorded":
+                raise LedgerConflict("audit receipts may only be added by the audit operation")
+            if lease_owner != f"auditor:{appended['auditor_id']}":
+                raise LedgerConflict("audit receipt requires its named auditor lease")
+            if appended["manifest_generation"] != current.generation:
+                raise LedgerConflict("audit receipt must bind the current manifest generation")
+        elif event_type == "audit_receipt_recorded":
+            raise LedgerConflict("audit receipt event requires exactly one appended receipt")
+        if len(new_audits) == len(old_audits) and candidate.get(
+            "independent_audit"
+        ) != current.manifest.get("independent_audit"):
+            raise LedgerConflict("independent audit summary can change only with a receipt")
         if current.generation != expected_generation:
             if (
                 candidate == current.manifest
@@ -747,6 +772,115 @@ class RunLedger:
             lease_owner=lease_owner,
             manifest=candidate,
             event_type="operation_result_recorded",
+            now=at,
+        )
+
+    def record_independent_audit(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        lease_owner: str,
+        auditor_id: str,
+        phase: str,
+        result: str,
+        complete: bool,
+        inventory_sha256: str,
+        evidence_sha256: str,
+        checks: dict,
+        now: datetime | None = None,
+    ) -> LedgerSnapshot:
+        """Append an independent workload or closure audit receipt.
+
+        The caller supplies digests for the external inventory and evidence
+        artifact; raw provider listings remain outside the run manifest. The
+        auditor must hold a separately named lease. Mapping cloud principals
+        to this owner name remains the responsibility of a future adapter.
+        """
+        self._validate_generation(expected_generation)
+        if not isinstance(auditor_id, str) or re.fullmatch(
+            r"[a-z0-9][a-z0-9._-]{0,63}", auditor_id
+        ) is None:
+            raise ContractError("audit receipt auditor_id is unsupported")
+        if lease_owner != f"auditor:{auditor_id}":
+            raise LedgerConflict("independent audit requires the named auditor lease")
+        at = now or self._clock()
+        current = self.read(run_id)
+        self._require_active_lease(current, lease_owner, at)
+        if current.generation != expected_generation:
+            raise GenerationConflict("manifest generation is stale")
+        if phase == "workload":
+            if current.manifest["state"] != "auditing":
+                raise LedgerConflict("workload audit is only accepted in auditing state")
+            expected_checks = {"resource_inventory_complete", "resources_absent"}
+        elif phase == "closure":
+            if current.manifest["state"] != "controls_reclaiming":
+                raise LedgerConflict("closure audit requires controls_reclaiming state")
+            if any(
+                item["status"] != "deleted"
+                for item in current.manifest["resources"] + current.manifest["controls"]
+            ):
+                raise LedgerConflict("closure audit requires all workload and control resources deleted")
+            expected_checks = {
+                "resource_inventory_complete", "resources_absent", "project_absent",
+                "billing_unlinked", "budget_reconciled", "recovery_controls_absent",
+            }
+            prior = current.manifest.get("independent_audit")
+            if (
+                not isinstance(prior, dict) or prior.get("phase") != "workload"
+                or prior.get("result") != "passed"
+            ):
+                raise LedgerConflict("closure audit requires a passed workload audit")
+        else:
+            raise ContractError("audit receipt phase is unsupported")
+        if not isinstance(checks, dict) or set(checks) != expected_checks or any(
+            not isinstance(value, bool) for value in checks.values()
+        ):
+            raise ContractError("audit receipt checks do not match its phase")
+        if not isinstance(complete, bool):
+            raise ContractError("audit receipt complete must be boolean")
+        if not isinstance(inventory_sha256, str) or re.fullmatch(
+            r"[0-9a-f]{64}", inventory_sha256
+        ) is None:
+            raise ContractError("audit inventory fingerprint must be a SHA-256 hex digest")
+        if not isinstance(evidence_sha256, str) or re.fullmatch(
+            r"[0-9a-f]{64}", evidence_sha256
+        ) is None:
+            raise ContractError("audit evidence fingerprint must be a SHA-256 hex digest")
+        all_checks_passed = all(checks.values())
+        if result == "passed" and (not complete or not all_checks_passed):
+            raise ContractError("passed audit requires complete coverage and passing checks")
+        if result == "failed" and all_checks_passed:
+            raise ContractError("failed audit requires at least one failed check")
+        if result == "incomplete" and complete:
+            raise ContractError("incomplete audit cannot claim complete coverage")
+        if result not in {"passed", "failed", "incomplete"}:
+            raise ContractError("audit receipt result is unsupported")
+        receipt = {
+            "sequence": len(current.manifest.get("audit_receipts", [])) + 1,
+            "run_id": run_id,
+            "project_id": current.manifest["scope"]["project_id"],
+            "recovery_project_id": current.manifest["scope"]["recovery_project_id"],
+            "phase": phase,
+            "result": result,
+            "complete": complete,
+            "auditor_id": auditor_id,
+            "observed_at": _format_time(at),
+            "inventory_sha256": inventory_sha256,
+            "evidence_sha256": evidence_sha256,
+            "manifest_generation": current.generation,
+            "checks": json.loads(json.dumps(checks)),
+        }
+        receipt["receipt_id"] = hashlib.sha256(_canonical_json(receipt)).hexdigest()
+        candidate = json.loads(json.dumps(current.manifest))
+        candidate.setdefault("audit_receipts", []).append(receipt)
+        candidate["independent_audit"] = _audit_summary(receipt)
+        return self.replace(
+            run_id,
+            expected_generation=expected_generation,
+            lease_owner=lease_owner,
+            manifest=candidate,
+            event_type="audit_receipt_recorded",
             now=at,
         )
 
