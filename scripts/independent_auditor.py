@@ -8,7 +8,7 @@ the report format. Missing or partial coverage cannot produce a passing audit.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 import re
@@ -57,6 +57,20 @@ WORKLOAD_SURFACES = frozenset(
     }
 )
 
+DISCOVERABLE_TYPES = {
+    "compute.networks": "gcp.compute.network",
+    "compute.subnetworks": "gcp.compute.subnetwork",
+    "compute.routers": "gcp.compute.router",
+    "compute.router_nats": "gcp.compute.router_nat",
+    "container.clusters": "gcp.gke.cluster",
+    "container.node_pools": "gcp.gke.node_pool",
+    "gkehub.feature_memberships": "gcp.gkehub.feature_membership",
+    "gkehub.memberships": "gcp.gkehub.membership",
+    "pubsub.subscriptions": "gcp.pubsub.subscription",
+    "pubsub.topics": "gcp.pubsub.topic",
+    "storage.object_versions": "gcp.storage.object",
+}
+
 REPORT_FIELDS = {
     "schema", "run_id", "project_id", "manifest_sha256", "observed_at",
     "auditor_id", "auditor_email", "coverage", "resources",
@@ -104,6 +118,16 @@ class AuditAssessment:
     evidence_sha256: str
     observed_at: datetime
     auditor_id: str
+
+
+@dataclass(frozen=True)
+class DiscoveryRegistration:
+    """Result of appending exact run-owned discoveries before cleanup."""
+
+    snapshot: LedgerSnapshot
+    assessment: AuditAssessment
+    registered_count: int
+    unregistered_count: int
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -335,3 +359,143 @@ def record_workload_audit(
         now=now,
     )
     return snapshot, assessment
+
+
+def register_discovered_workload_resources(
+    ledger: RunLedger,
+    run_id: str,
+    collector,
+    *,
+    expected_auditor_email: str,
+    now: datetime | None = None,
+) -> DiscoveryRegistration:
+    """Collect complete authenticated inventory and register only run-owned IDs.
+
+    The read-only collector verifies the human auditor principal with Google's
+    UserInfo endpoint. The function then takes that auditor's separate ledger
+    lease, checks that the source manifest has not changed, and appends exact
+    eligible resources. The caller must run the reaper only after this function
+    releases the auditor lease. Unowned or unsupported assets are fingerprinted
+    as unregistered and remain visible to the later independent absence audit.
+    """
+    at = now or datetime.now(timezone.utc)
+    if at.tzinfo is None or at.utcoffset() is None:
+        raise AuditReportError("inventory registration time must include a timezone")
+    before = ledger.read(run_id)
+    if before.manifest["state"] != "cleaning":
+        raise AuditReportError("discovered resources can only be registered during cleaning")
+    observed_at = at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    report = collector.collect(
+        before.manifest,
+        observed_at=observed_at,
+        expected_auditor_email=expected_auditor_email,
+    )
+    assessment = assess_workload_inventory(before.manifest, report)
+    if not assessment.complete:
+        raise AuditReportError("incomplete inventory cannot extend the run delete plan")
+
+    project_id = before.manifest["scope"]["project_id"]
+    run_id = before.manifest["run_id"]
+    existing = {
+        item["id"]: item
+        for item in before.manifest["resources"]
+    }
+    registered = []
+    unregistered = []
+    project_create_proven = any(
+        event["kind"] == "intent"
+        and event["action"] == "create"
+        and event["resource_type"] == "gcp.resourcemanager.project"
+        and event["resource_id"] == f"projects/{project_id}"
+        and any(
+            result["kind"] == "result"
+            and result["operation_id"] == event["operation_id"]
+            and result["outcome"] in {"succeeded", "reconciled_present"}
+            for result in before.manifest["operations"]
+        )
+        for event in before.manifest["operations"]
+    )
+    for discovered in report["resources"]:
+        surface = discovered["surface"]
+        resource_id = discovered["id"]
+        resource_type = DISCOVERABLE_TYPES.get(surface)
+        ownership_proof = None
+        if surface == "gkehub.features":
+            expected_feature = (
+                f"projects/{project_id}/locations/global/features/configmanagement"
+            )
+            if resource_id == expected_feature and project_create_proven:
+                resource_type = "gcp.gkehub.feature"
+                ownership_proof = "run_project"
+        elif resource_type is not None:
+            if surface == "storage.object_versions":
+                try:
+                    validate_storage_object_id(resource_id, project_id, run_id)
+                except ContractError:
+                    resource_type = None
+                else:
+                    ownership_proof = "run_name"
+            elif run_id in resource_id:
+                ownership_proof = "run_name"
+            else:
+                resource_type = None
+
+        prior = existing.get(resource_id)
+        if prior is not None:
+            if prior["type"] == resource_type and prior["status"] != "deleted":
+                continue
+            unregistered.append(discovered)
+            continue
+        if resource_type is None or ownership_proof is None:
+            unregistered.append(discovered)
+            continue
+        registered.append({
+            "type": resource_type,
+            "id": resource_id,
+            "ownership_proof": ownership_proof,
+            "status": "present",
+            "delete_attempts": 0,
+        })
+
+    registered.sort(key=lambda item: (item["type"], item["id"]))
+    unregistered.sort(key=lambda item: (item["surface"], item["id"]))
+    if len(registered) > 256:
+        raise AuditReportError("discovered cleanup target count exceeds the bounded ledger packet")
+    unregistered_sha256 = _digest(unregistered)
+    lease_owner = f"auditor:{assessment.auditor_id}"
+    leased = ledger.acquire_lease(
+        run_id,
+        expected_generation=before.generation,
+        owner=lease_owner,
+        now=at,
+    )
+    try:
+        registered_snapshot = ledger.record_discovered_resources(
+            run_id,
+            expected_generation=leased.generation,
+            lease_owner=lease_owner,
+            auditor_id=assessment.auditor_id,
+            observed_at=assessment.observed_at,
+            source_manifest_sha256=report["manifest_sha256"],
+            evidence_sha256=assessment.evidence_sha256,
+            resources=registered,
+            operation_count=len(before.manifest["operations"]),
+            unregistered_resource_count=len(unregistered),
+            unregistered_resources_sha256=unregistered_sha256,
+            now=at,
+        )
+    finally:
+        latest = ledger.read(run_id)
+        if latest.metadata["lease"]["owner"] == lease_owner:
+            ledger.release_lease(
+                run_id,
+                expected_generation=latest.generation,
+                owner=lease_owner,
+                now=at,
+            )
+    return DiscoveryRegistration(
+        snapshot=ledger.read(run_id),
+        assessment=assessment,
+        registered_count=len(registered),
+        unregistered_count=len(unregistered),
+    )

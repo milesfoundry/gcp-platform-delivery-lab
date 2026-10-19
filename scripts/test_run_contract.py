@@ -609,6 +609,40 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_manifest(candidate)
 
+    def test_discovery_receipt_sequence_rejects_boolean_integer(self):
+        candidate = self.manifest()
+        candidate["state"] = "cleaning"
+        receipt = {
+            "sequence": 1,
+            "run_id": RUN_ID,
+            "project_id": PROJECT,
+            "auditor_id": "google-user-12345678901234567890",
+            "observed_at": "2026-10-18T12:01:00Z",
+            "manifest_sha256": "a" * 64,
+            "evidence_sha256": "b" * 64,
+            "registered_resources": [],
+            "unregistered_resource_count": 0,
+            "unregistered_resources_sha256": "c" * 64,
+            "operation_count": 0,
+            "manifest_generation": 1,
+        }
+        canonical = json.dumps(
+            receipt, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        receipt["receipt_id"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        candidate["discovery_receipts"] = [receipt]
+        self.assertEqual(validate_manifest(candidate)["discovery_receipts"][0]["sequence"], 1)
+        receipt["sequence"] = True
+        canonical = json.dumps(
+            {key: value for key, value in receipt.items() if key != "receipt_id"},
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        receipt["receipt_id"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        with self.assertRaises(ContractError):
+            validate_manifest(candidate)
+
     def test_cleanup_is_reverse_dependency_order_and_stable(self):
         result = cleanup_plan(self.manifest())
         ranks = [

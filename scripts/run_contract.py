@@ -17,6 +17,9 @@ from urllib.parse import quote, unquote
 SCHEMA = "portfolio.gcp-run.v2"
 MAX_RUN_LIFETIME = timedelta(minutes=60)
 MAX_OPERATION_ATTEMPTS = 3
+MAX_MANIFEST_RESOURCES = 512
+MAX_DISCOVERY_RECEIPTS = 64
+MAX_DISCOVERED_PER_RECEIPT = 256
 RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$")
 PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 REVISION = re.compile(r"^[0-9a-f]{40}$")
@@ -233,7 +236,8 @@ def validate_intent(
         {
             "schema", "run_id", "scope", "created_at", "deadline_at", "source",
             "finance", "cleanup", "state", "resources", "controls",
-            "independent_audit", "audit_receipts", "terraform_state", "operations",
+            "independent_audit", "audit_receipts", "discovery_receipts",
+            "terraform_state", "operations",
         },
         "intent",
     )
@@ -430,6 +434,8 @@ def validate_intent(
             raise ContractError("new intent must have an empty provider operation history")
         if data.get("audit_receipts", []) != [] or data.get("independent_audit") is not None:
             raise ContractError("new intent cannot contain independent audit results")
+        if data.get("discovery_receipts", []) != []:
+            raise ContractError("new intent cannot contain discovery receipts")
     return data
 
 
@@ -867,6 +873,8 @@ def validate_manifest(manifest: object) -> dict:
     resources = data.get("resources")
     if not isinstance(resources, list):
         raise ContractError("resources must be a list")
+    if len(resources) > MAX_MANIFEST_RESOURCES:
+        raise ContractError("resources exceed the bounded manifest inventory")
     recovery_project_id = data["scope"]["recovery_project_id"]
     controls = data.get("controls")
     if not isinstance(controls, list):
@@ -947,6 +955,83 @@ def validate_manifest(manifest: object) -> dict:
                 raise ContractError(
                     "provider operation target must be predeclared in the exact run inventory"
                 )
+
+    discovery_receipts = data.get("discovery_receipts", [])
+    if not isinstance(discovery_receipts, list) or len(discovery_receipts) > MAX_DISCOVERY_RECEIPTS:
+        raise ContractError("discovery_receipts exceed the bounded append-only history")
+    previous_discovery_time = None
+    discovered_ids = set()
+    discovery_fields = {
+        "sequence", "run_id", "project_id", "auditor_id", "observed_at",
+        "manifest_sha256", "evidence_sha256", "registered_resources",
+        "unregistered_resource_count", "unregistered_resources_sha256",
+        "operation_count", "manifest_generation", "receipt_id",
+    }
+    declared_by_id = {(item["type"], item["id"]): item for item in resources}
+    for index, receipt in enumerate(discovery_receipts, start=1):
+        receipt = _mapping(receipt, f"discovery_receipts[{index - 1}]")
+        _only_keys(receipt, discovery_fields, f"discovery_receipts[{index - 1}]")
+        if set(receipt) != discovery_fields:
+            raise ContractError("discovery receipt fields are incomplete")
+        if (
+            isinstance(receipt["sequence"], bool)
+            or not isinstance(receipt["sequence"], int)
+            or receipt["sequence"] != index
+            or receipt["run_id"] != run_id
+            or receipt["project_id"] != project_id
+        ):
+            raise ContractError("discovery receipt sequence and scope must match the run")
+        auditor_id = receipt["auditor_id"]
+        if not isinstance(auditor_id, str) or re.fullmatch(
+            r"google-user-[A-Za-z0-9._~-]{1,255}", auditor_id
+        ) is None:
+            raise ContractError("discovery receipt auditor must be a Google user subject")
+        observed_at = _timestamp(receipt["observed_at"], "discovery receipt observed_at")
+        if previous_discovery_time is not None and observed_at < previous_discovery_time:
+            raise ContractError("discovery receipt timestamps must be monotonic")
+        previous_discovery_time = observed_at
+        for field in ("manifest_sha256", "evidence_sha256", "unregistered_resources_sha256", "receipt_id"):
+            if not isinstance(receipt[field], str) or not SHA256.fullmatch(receipt[field]):
+                raise ContractError(f"discovery receipt {field} must be a SHA-256 digest")
+        generation = receipt["manifest_generation"]
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+            raise ContractError("discovery receipt manifest_generation must be positive")
+        operation_count = receipt["operation_count"]
+        if (isinstance(operation_count, bool) or not isinstance(operation_count, int)
+                or operation_count < 0):
+            raise ContractError("discovery receipt operation_count must be non-negative")
+        unregistered_count = receipt["unregistered_resource_count"]
+        if (isinstance(unregistered_count, bool) or not isinstance(unregistered_count, int)
+                or not 0 <= unregistered_count <= 100_000):
+            raise ContractError("discovery receipt unregistered count is out of bounds")
+        registered = receipt["registered_resources"]
+        if not isinstance(registered, list) or len(registered) > MAX_DISCOVERED_PER_RECEIPT:
+            raise ContractError("discovery receipt registered resources exceed the bound")
+        prior_key = None
+        for entry in registered:
+            entry = _mapping(entry, "discovery receipt registered resource")
+            _only_keys(entry, {"type", "id"}, "discovery receipt registered resource")
+            if set(entry) != {"type", "id"}:
+                raise ContractError("discovery receipt resource fields are incomplete")
+            key = (entry["type"], entry["id"])
+            if not all(isinstance(value, str) and value for value in key):
+                raise ContractError("discovery receipt resource identity is malformed")
+            if prior_key is not None and key <= prior_key:
+                raise ContractError("discovery receipt resources must be unique and sorted")
+            prior_key = key
+            if key not in declared_by_id:
+                raise ContractError("discovery receipt resource is absent from the manifest")
+            if key in discovered_ids:
+                raise ContractError("resource may be registered by discovery only once")
+            discovered_ids.add(key)
+        receipt_payload = {key: value for key, value in receipt.items() if key != "receipt_id"}
+        receipt_canonical = json.dumps(
+            receipt_payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        if hashlib.sha256(receipt_canonical.encode("utf-8")).hexdigest() != receipt["receipt_id"]:
+            raise ContractError("discovery receipt id does not match its contents")
+        if data["state"] not in {"cleaning", "auditing", "incomplete", "controls_reclaiming", "closed"}:
+            raise ContractError("discovery receipts require a teardown lifecycle state")
 
     receipts = data.get("audit_receipts", [])
     if not isinstance(receipts, list) or len(receipts) > 64:

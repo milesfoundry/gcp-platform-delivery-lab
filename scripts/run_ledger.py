@@ -46,6 +46,7 @@ EVENT_TYPES = frozenset(
         "operation_intent_recorded",
         "operation_progress_recorded",
         "operation_result_recorded",
+        "inventory_discovered",
         "audit_receipt_recorded",
     }
 )
@@ -490,6 +491,82 @@ class RunLedger:
                 raise LedgerConflict("audit receipt must bind the current manifest generation")
         elif event_type == "audit_receipt_recorded":
             raise LedgerConflict("audit receipt event requires exactly one appended receipt")
+        old_discoveries = current.manifest.get("discovery_receipts", [])
+        new_discoveries = candidate.get("discovery_receipts", [])
+        if new_discoveries[:len(old_discoveries)] != old_discoveries:
+            raise LedgerConflict("inventory discovery receipt history is append-only")
+        if len(new_discoveries) - len(old_discoveries) > 1:
+            raise LedgerConflict("one inventory discovery receipt may be recorded per transition")
+        discovery_delta = len(new_discoveries) - len(old_discoveries)
+        if discovery_delta == 1:
+            appended = new_discoveries[-1]
+            if event_type != "inventory_discovered":
+                raise LedgerConflict("discovery receipts may only be added by inventory registration")
+            if lease_owner != f"auditor:{appended['auditor_id']}":
+                raise LedgerConflict("inventory registration requires its named auditor lease")
+            if appended["manifest_generation"] != current.generation:
+                raise LedgerConflict("inventory receipt must bind the current manifest generation")
+            expected_resources = appended["registered_resources"]
+        elif event_type == "inventory_discovered":
+            raise LedgerConflict("inventory registration requires one appended discovery receipt")
+        else:
+            expected_resources = []
+        if audit_delta and discovery_delta:
+            raise LedgerConflict("audit and discovery receipts require separate ledger transitions")
+
+        old_resources = current.manifest["resources"]
+        new_resources = candidate["resources"]
+        if len(new_resources) < len(old_resources):
+            raise LedgerConflict("run inventory entries cannot be removed")
+        appended_resources = new_resources[len(old_resources):]
+        if event_type == "inventory_discovered":
+            actual_resources = [{"type": item["type"], "id": item["id"]}
+                                for item in appended_resources]
+            if actual_resources != expected_resources:
+                raise LedgerConflict("discovery receipt must exactly bind appended resources")
+        elif appended_resources:
+            predeclared_during_provisioning = (
+                event_type == "manifest_updated"
+                and lease_owner == "launcher"
+                and candidate["state"] == "provisioning"
+                and all(item["status"] == "expected" for item in appended_resources)
+            )
+            if not predeclared_during_provisioning:
+                raise LedgerConflict(
+                    "new run resources may only be predeclared for provisioning or discovered by audit"
+                )
+
+        new_results = {
+            event["operation_id"]: event
+            for event in new_operations[len(old_operations):]
+            if event["kind"] == "result"
+        }
+        intent_by_id = {
+            event["operation_id"]: event
+            for event in candidate["operations"]
+            if event["kind"] == "intent"
+        }
+        permitted_status = {}
+        for operation_id_value, result in new_results.items():
+            intent = intent_by_id.get(operation_id_value)
+            if intent is None:
+                continue
+            if intent["action"] == "create" and result["outcome"] in {
+                "succeeded", "reconciled_present"
+            }:
+                permitted_status[(intent["resource_type"], intent["resource_id"])] = "present"
+            elif intent["action"] == "delete" and result["outcome"] in {
+                "succeeded", "reconciled_absent"
+            }:
+                permitted_status[(intent["resource_type"], intent["resource_id"])] = "deleted"
+        for old_item, new_item in zip(old_resources, new_resources):
+            for field in ("type", "id", "ownership_proof", "delete_attempts"):
+                if old_item.get(field) != new_item.get(field):
+                    raise LedgerConflict(f"existing resource {field} is immutable")
+            if old_item["status"] != new_item["status"]:
+                expected_status = permitted_status.get((old_item["type"], old_item["id"]))
+                if new_item["status"] != expected_status:
+                    raise LedgerConflict("resource status changes require a terminal provider result")
         if len(new_audits) == len(old_audits) and candidate.get(
             "independent_audit"
         ) != current.manifest.get("independent_audit"):
@@ -775,6 +852,138 @@ class RunLedger:
             lease_owner=lease_owner,
             manifest=candidate,
             event_type="operation_result_recorded",
+            now=at,
+        )
+
+    def record_discovered_resources(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        lease_owner: str,
+        auditor_id: str,
+        observed_at: datetime,
+        source_manifest_sha256: str,
+        evidence_sha256: str,
+        resources: list[dict],
+        operation_count: int,
+        unregistered_resource_count: int,
+        unregistered_resources_sha256: str,
+        now: datetime | None = None,
+    ) -> LedgerSnapshot:
+        """Append run-named assets found by a verified independent inventory.
+
+        Only the named auditor lease can extend the inventory. Resources are
+        validated again by the manifest contract, and the receipt binds the
+        exact pre-discovery manifest plus the collector's complete evidence
+        fingerprint. Unsupported or ambiguous resources are counted and
+        fingerprinted but never become delete targets.
+        """
+        self._validate_generation(expected_generation)
+        if not isinstance(auditor_id, str) or re.fullmatch(
+            r"google-user-[A-Za-z0-9._~-]{1,255}", auditor_id
+        ) is None:
+            raise ContractError("discovery auditor_id must be a Google user subject")
+        if lease_owner != f"auditor:{auditor_id}":
+            raise LedgerConflict("inventory discovery requires the named auditor lease")
+        for label, digest in (
+            ("source manifest", source_manifest_sha256),
+            ("inventory evidence", evidence_sha256),
+            ("unregistered resource", unregistered_resources_sha256),
+        ):
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                raise ContractError(f"{label} fingerprint must be a SHA-256 digest")
+        if not isinstance(resources, list) or len(resources) > 256:
+            raise ContractError("discovered resource batch exceeds its bound")
+        if (isinstance(operation_count, bool) or not isinstance(operation_count, int)
+                or operation_count < 0):
+            raise ContractError("discovery operation count must be non-negative")
+        if (isinstance(unregistered_resource_count, bool)
+                or not isinstance(unregistered_resource_count, int)
+                or not 0 <= unregistered_resource_count <= 100_000):
+            raise ContractError("unregistered resource count is out of bounds")
+
+        at = now or self._clock()
+        observed_at_text = _format_time(observed_at)
+        if observed_at > at:
+            raise ContractError("discovery observation cannot be later than its ledger receipt")
+        current = self.read(run_id)
+        self._require_active_lease(current, lease_owner, at)
+
+        normalized_resources = []
+        for raw in resources:
+            if not isinstance(raw, dict) or set(raw) != {
+                "type", "id", "ownership_proof", "status", "delete_attempts"
+            }:
+                raise ContractError("discovered resource record is malformed")
+            normalized_resources.append(json.loads(json.dumps(raw)))
+        normalized_resources.sort(key=lambda item: (item["type"], item["id"]))
+        keys = [(item["type"], item["id"]) for item in normalized_resources]
+        if len(set(keys)) != len(keys):
+            raise ContractError("discovery batch contains duplicate resources")
+        if any(
+            item["status"] != "present"
+            or item["delete_attempts"] != 0
+            or item["ownership_proof"] not in {"run_name", "run_project"}
+            for item in normalized_resources
+        ):
+            raise ContractError("discovered resources must be present with bounded ownership proof")
+
+        receipt_resources = [{"type": item["type"], "id": item["id"]}
+                             for item in normalized_resources]
+        stable = {
+            "run_id": run_id,
+            "project_id": current.manifest["scope"]["project_id"],
+            "auditor_id": auditor_id,
+            "observed_at": observed_at_text,
+            "manifest_sha256": source_manifest_sha256,
+            "evidence_sha256": evidence_sha256,
+            "registered_resources": receipt_resources,
+            "operation_count": operation_count,
+            "unregistered_resource_count": unregistered_resource_count,
+            "unregistered_resources_sha256": unregistered_resources_sha256,
+        }
+        prior = [
+            receipt for receipt in current.manifest.get("discovery_receipts", [])
+            if receipt["auditor_id"] == auditor_id
+            and receipt["observed_at"] == observed_at_text
+        ]
+        if prior:
+            if all(prior[-1].get(key) == value for key, value in stable.items()):
+                return current
+            raise LedgerConflict("discovery observation key already has different evidence")
+
+        if current.generation != expected_generation:
+            raise GenerationConflict("manifest generation is stale")
+        if current.manifest["state"] != "cleaning":
+            raise LedgerConflict("resource discovery registration requires cleaning state")
+        canonical_manifest = json.dumps(
+            validate_manifest(current.manifest), sort_keys=True,
+            separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")
+        actual_manifest_sha256 = hashlib.sha256(canonical_manifest).hexdigest()
+        if actual_manifest_sha256 != source_manifest_sha256:
+            raise GenerationConflict("inventory was collected for a different manifest")
+        if operation_count != len(current.manifest["operations"]):
+            raise GenerationConflict("inventory operation count does not match the manifest")
+        declared = {(item["type"], item["id"]) for item in current.manifest["resources"]}
+        if any(key in declared for key in keys):
+            raise LedgerConflict("discovery batch may only append previously undeclared resources")
+        candidate = json.loads(json.dumps(current.manifest))
+        candidate["resources"].extend(normalized_resources)
+        receipt = {
+            "sequence": len(candidate.get("discovery_receipts", [])) + 1,
+            **stable,
+            "manifest_generation": current.generation,
+        }
+        receipt["receipt_id"] = hashlib.sha256(_canonical_json(receipt)).hexdigest()
+        candidate.setdefault("discovery_receipts", []).append(receipt)
+        return self.replace(
+            run_id,
+            expected_generation=expected_generation,
+            lease_owner=lease_owner,
+            manifest=candidate,
+            event_type="inventory_discovered",
             now=at,
         )
 

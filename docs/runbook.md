@@ -44,8 +44,9 @@ soft-delete retention cannot be cleaned within the lab deadline and is rejected
 by the mutation adapter. The cleanup adapter has not been wired to the ledger
 controller or deployed identities. Its cluster review callback is an external
 gate, not proof of Terraform state or a GKE API deletion-protection setting.
-Independent provider discovery/audit, API-to-ledger principal binding, IAM
-isolation and live provider behavior remain unqualified. GCS deletion verifies
+The source now registers supported run-owned discoveries under a separate
+auditor lease before cleanup; API-to-ledger principal binding, IAM isolation and
+live provider behavior remain unqualified. GCS deletion verifies
 the project number, bucket ownership and London bucket location; it requires an
 explicit zero-duration soft-delete policy and rejects buckets with active soft
 delete retention. No cloud resource creation is authorized by these files.
@@ -69,8 +70,18 @@ tests cover create and delete response loss, cross-run project-ID rejection
 before provider access, and repeated cleanup after a confirmed delete without a
 second delete call. These verify the local ledger/controller contract only;
 they do not establish Google IAM isolation or real provider behavior.
-Independent discovery/audit, control reclamation and production wiring for the
-provider adapter remain unimplemented.
+Before every cleanup attempt, the reaper enters `cleaning` and releases its
+lease. The independently authenticated human auditor collects a complete
+inventory and appends only supported resources whose exact IDs prove run
+ownership. Unsupported or ambiguous findings are fingerprinted in the receipt
+but never become delete targets; the final absence audit must still account for
+them. The reaper then reacquires its lease and may clean only after a discovery
+receipt matches the current provider-operation count. A failed or ambiguous
+provider operation requires a fresh inventory before resuming cleanup. This
+handoff is implemented and fake-tested in source, but the collector, ledger and
+mutation adapter are not wired together in a deployed identity or live GCP
+environment. API-to-ledger principal binding, control reclamation and live
+provider qualification remain open.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources

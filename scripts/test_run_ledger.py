@@ -162,11 +162,34 @@ class RunLedgerTests(unittest.TestCase):
         for index, state in enumerate(
             ["ready", "teardown_requested", "cleaning", "auditing"], start=20
         ):
+            if state == "auditing":
+                resource_id = snapshot.manifest["resources"][0]["id"]
+                intent_snapshot = self.ledger.record_operation_intent(
+                    RUN_ID,
+                    expected_generation=snapshot.generation,
+                    lease_owner="launcher",
+                    attempt=1,
+                    action="delete",
+                    resource_type="gcp.compute.network",
+                    resource_id=resource_id,
+                    request_sha256="0" * 64,
+                    now=self.now + timedelta(seconds=index),
+                )
+                operation = next(
+                    event for event in intent_snapshot.manifest["operations"]
+                    if event["kind"] == "intent"
+                )
+                snapshot = self.ledger.record_operation_result(
+                    RUN_ID,
+                    expected_generation=intent_snapshot.generation,
+                    lease_owner="launcher",
+                    operation_id_value=operation["operation_id"],
+                    outcome="succeeded",
+                    response_sha256="f" * 64,
+                    now=self.now + timedelta(seconds=index),
+                )
             candidate = deepcopy(snapshot.manifest)
             candidate["state"] = state
-            if state == "auditing":
-                for resource in candidate["resources"]:
-                    resource["status"] = "deleted"
             snapshot = self.ledger.replace(
                 RUN_ID,
                 expected_generation=snapshot.generation,
@@ -267,6 +290,39 @@ class RunLedgerTests(unittest.TestCase):
                 expected_generation=original.generation,
                 lease_owner="launcher",
                 manifest=changed,
+            )
+
+    def test_resource_inventory_cannot_be_extended_or_status_changed_generically(self):
+        snapshot = self.lease_in_provisioning()
+        candidate = deepcopy(snapshot.manifest)
+        candidate["resources"].append({
+            "type": "gcp.compute.network",
+            "id": (
+                f"projects/{self.intent['scope']['project_id']}"
+                f"/global/networks/{RUN_ID}-unregistered"
+            ),
+            "ownership_proof": "run_name",
+            "status": "present",
+            "delete_attempts": 0,
+        })
+        with self.assertRaisesRegex(LedgerConflict, "discovered by audit"):
+            self.ledger.replace(
+                RUN_ID,
+                expected_generation=snapshot.generation,
+                lease_owner="launcher",
+                manifest=candidate,
+                now=self.now + timedelta(seconds=20),
+            )
+
+        candidate = deepcopy(snapshot.manifest)
+        candidate["resources"][0]["status"] = "deleted"
+        with self.assertRaisesRegex(LedgerConflict, "terminal provider result"):
+            self.ledger.replace(
+                RUN_ID,
+                expected_generation=snapshot.generation,
+                lease_owner="launcher",
+                manifest=candidate,
+                now=self.now + timedelta(seconds=20),
             )
 
     def test_operation_intent_precedes_result_and_retries_reconcile_exactly(self):

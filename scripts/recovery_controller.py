@@ -247,25 +247,24 @@ class RecoveryController:
         *,
         lease_owner: str,
     ) -> tuple[LedgerSnapshot, list[OperationExecution]]:
-        """Delete predeclared workload resources in reverse dependency order.
+        """Delete inventoried workload resources in reverse dependency order.
 
         Cleanup stops at the first failed, running, or unresolved provider
-        operation. A later lease holder can resume the same exact intent. This
-        method does not perform independent discovery/audit or close the run.
+        operation. A later lease holder can resume the same exact intent. A
+        fresh independent inventory receipt is required before every cleanup
+        attempt so resources discovered after a lost create response are added
+        to the exact manifest delete plan.
         """
         snapshot = self.ledger.read(run_id)
-        if snapshot.manifest["state"] in {"teardown_requested", "incomplete"}:
-            candidate = json.loads(json.dumps(snapshot.manifest))
-            candidate["state"] = "cleaning"
-            snapshot = self.ledger.replace(
-                run_id,
-                expected_generation=snapshot.generation,
-                lease_owner=lease_owner,
-                manifest=candidate,
-                now=self.clock(),
+        if snapshot.manifest["state"] != "cleaning":
+            raise ContractError("workload cleanup requires a cleaning run")
+        discoveries = snapshot.manifest.get("discovery_receipts", [])
+        if not discoveries or discoveries[-1]["operation_count"] != len(
+            snapshot.manifest["operations"]
+        ):
+            raise ContractError(
+                "fresh independent inventory registration is required before cleanup"
             )
-        elif snapshot.manifest["state"] != "cleaning":
-            raise ContractError("workload cleanup requires teardown_requested or cleaning state")
 
         results = []
         for resource in cleanup_plan(snapshot.manifest):
@@ -335,6 +334,38 @@ class RecoveryController:
             snapshot = execution.snapshot
 
         return self.ledger.read(run_id), results
+
+    def begin_cleanup(
+        self,
+        run_id: str,
+        *,
+        lease_owner: str,
+    ) -> LedgerSnapshot:
+        """Enter cleaning and release the reaper lease for separate discovery.
+
+        The independently authenticated auditor must register a complete
+        inventory while the run is in `cleaning`. The reaper then reacquires
+        its own lease and calls `cleanup`; no provider delete is submitted here.
+        """
+        snapshot = self.ledger.read(run_id)
+        if snapshot.manifest["state"] in {"teardown_requested", "incomplete"}:
+            candidate = json.loads(json.dumps(snapshot.manifest))
+            candidate["state"] = "cleaning"
+            snapshot = self.ledger.replace(
+                run_id,
+                expected_generation=snapshot.generation,
+                lease_owner=lease_owner,
+                manifest=candidate,
+                now=self.clock(),
+            )
+        elif snapshot.manifest["state"] != "cleaning":
+            raise ContractError("cleanup discovery requires teardown_requested or cleaning state")
+        return self.ledger.release_lease(
+            run_id,
+            expected_generation=snapshot.generation,
+            owner=lease_owner,
+            now=self.clock(),
+        )
 
     @staticmethod
     def _validate_receipt(receipt: ProviderReceipt) -> None:

@@ -554,7 +554,17 @@ Required manifest fields:
   and federated identities fail closed. This is source/mock qualification only;
   it does not provision or independently authorize an auditor account or bind a
   Cloud IAM/API caller to the ledger lease. Exact budget ownership reconciliation
-  and cleanup mutations also remain open. See Google's
+  and cleanup mutations also remain open. `register_discovered_workload_resources()`
+  now requires complete inventory, applies a narrow run-ownership check, and
+  appends supported discoveries with an auditor lease and evidence receipt.
+  Cleanup requires a receipt whose operation count matches the current ledger;
+  after a failed or ambiguous delete the reaper releases its lease, a human
+  auditor refreshes inventory, and the reaper reacquires its lease before
+  resuming. Unsupported or unowned findings are fingerprinted but excluded
+  from deletion and must still be absent for the final audit to pass. This is
+  fake-tested source only: the Google principal is not cryptographically bound
+  to the ledger writer, and collector, ledger and mutation adapter are not
+  connected in a deployed runtime. See Google's
   [OpenID Connect UserInfo endpoint](https://developers.google.com/identity/openid-connect/reference#userinfo)
   and [token types](https://docs.cloud.google.com/docs/authentication/token-types).
   `scripts/closure_auditor.py` now defines a separate credential-free closure
@@ -758,9 +768,9 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    The cluster gate is only an external predicate; it does not inspect Terraform
    state. The Google provider's `deletion_protection` is a Terraform-side guard,
    not an API setting; the REST adapter's review gate is the deletion control on
-   that path. Dynamic inventory registration, auditor/API
-   principal binding, actual IAM isolation, remote state/backup and lifecycle
-   deployment remain open.
+   that path. Dynamic inventory registration now has a bounded ledger contract
+   and fake-tested auditor handoff. Auditor/API principal binding, actual IAM
+   isolation, remote state/backup and lifecycle deployment remain open.
 6. `.github/workflows/validate.yaml` remains credential-free for CI and runs
    schema, Terraform-render, cleanup, state, and negative-boundary checks. Add
    lifecycle workflow only after the reaper and cleanup path are deployed and

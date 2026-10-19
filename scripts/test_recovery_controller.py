@@ -8,6 +8,8 @@ from unittest.mock import patch
 from run_contract import ContractError
 from run_ledger import LedgerConflict, RunLedger
 from recovery_controller import ProviderReceipt, RecoveryController, request_fingerprint
+from independent_auditor import register_discovered_workload_resources
+from test_independent_auditor import report as normalized_report
 from test_run_contract import RUN_ID
 from test_run_ledger import FakeObjectStore, current_intent
 
@@ -51,6 +53,22 @@ class FakeOperationProvider:
     def poll_operation(self, operation_name):
         self.polls.append(operation_name)
         return self.poll_receipt
+
+
+class FakeInventoryCollector:
+    def __init__(self, resources):
+        self.resources = resources
+
+    def collect(self, manifest, *, observed_at, expected_auditor_email):
+        evidence = normalized_report(
+            run=manifest,
+            resources=self.resources,
+            observed_at=observed_at,
+        )
+        evidence["auditor_email"] = expected_auditor_email
+        for resource in self.resources:
+            evidence["coverage"][resource["surface"]]["resource_count"] += 1
+        return evidence
 
 
 class RecoveryControllerTests(unittest.TestCase):
@@ -179,11 +197,36 @@ class RecoveryControllerTests(unittest.TestCase):
         self.assertEqual(self.provider.submit_calls, [])
         self.assertEqual(self.provider.lookups, [])
 
+    def test_cleanup_refuses_provider_calls_without_a_fresh_discovery_receipt(self):
+        current = self.ledger.read(RUN_ID)
+        candidate = deepcopy(current.manifest)
+        candidate["state"] = "teardown_requested"
+        current = self.ledger.replace(
+            RUN_ID,
+            expected_generation=current.generation,
+            lease_owner="launcher",
+            manifest=candidate,
+            now=self.now + timedelta(seconds=30),
+        )
+        self.controller.clock = lambda: self.now + timedelta(seconds=31)
+        released = self.controller.begin_cleanup(
+            RUN_ID, lease_owner="launcher"
+        )
+        leased = self.ledger.acquire_lease(
+            RUN_ID,
+            expected_generation=released.generation,
+            owner="launcher",
+            now=self.now + timedelta(seconds=31),
+        )
+        with self.assertRaisesRegex(ContractError, "fresh independent inventory"):
+            self.controller.cleanup(RUN_ID, lease_owner="launcher")
+        self.assertEqual(self.provider.submit_calls, [])
+        self.assertEqual(self.provider.lookups, [])
+
     def test_cleanup_is_idempotent_after_provider_confirms_delete(self):
         current = self.ledger.read(RUN_ID)
         candidate = deepcopy(current.manifest)
         candidate["state"] = "teardown_requested"
-        candidate["resources"][0]["status"] = "present"
         self.provider.resources.add(self.resource_id)
         self.provider.submit_receipt = ProviderReceipt(
             "succeeded", "d" * 64
@@ -195,7 +238,7 @@ class RecoveryControllerTests(unittest.TestCase):
             manifest=candidate,
             now=self.now + timedelta(seconds=30),
         )
-        self.controller.clock = lambda: self.now + timedelta(seconds=40)
+        self._prepare_independent_cleanup(observed=True, now_offset=31)
 
         snapshot, executions = self.controller.cleanup(
             RUN_ID, lease_owner="launcher"
@@ -205,10 +248,12 @@ class RecoveryControllerTests(unittest.TestCase):
         self.assertNotIn(self.resource_id, self.provider.resources)
         self.assertEqual(len(self.provider.submit_calls), 1)
 
+        self._refresh_discovery(observed=False, now_offset=50)
+        before_repeat = self.ledger.read(RUN_ID)
         repeated_snapshot, repeated_executions = self.controller.cleanup(
             RUN_ID, lease_owner="launcher"
         )
-        self.assertEqual(repeated_snapshot, snapshot)
+        self.assertEqual(repeated_snapshot, before_repeat)
         self.assertEqual(repeated_executions, [])
         self.assertEqual(len(self.provider.submit_calls), 1)
 
@@ -216,7 +261,6 @@ class RecoveryControllerTests(unittest.TestCase):
         current = self.ledger.read(RUN_ID)
         candidate = deepcopy(current.manifest)
         candidate["state"] = "teardown_requested"
-        candidate["resources"][0]["status"] = "present"
         self.provider.resources.add(self.resource_id)
         self.provider.lose_delete_response = True
         self.ledger.replace(
@@ -226,13 +270,20 @@ class RecoveryControllerTests(unittest.TestCase):
             manifest=candidate,
             now=self.now + timedelta(seconds=30),
         )
-        self.controller.clock = lambda: self.now + timedelta(seconds=40)
+        self._prepare_independent_cleanup(observed=True, now_offset=31)
 
         with self.assertRaisesRegex(ConnectionError, "lost provider response"):
             self.controller.cleanup(RUN_ID, lease_owner="launcher")
         self.assertNotIn(self.resource_id, self.provider.resources)
         self.assertEqual(len(self.provider.submit_calls), 1)
 
+        self.ledger.release_lease(
+            RUN_ID,
+            expected_generation=self.ledger.read(RUN_ID).generation,
+            owner="launcher",
+            now=self.now + timedelta(seconds=45),
+        )
+        self._refresh_discovery(observed=False, now_offset=46)
         snapshot, executions = self.controller.cleanup(
             RUN_ID, lease_owner="launcher"
         )
@@ -242,6 +293,54 @@ class RecoveryControllerTests(unittest.TestCase):
             ("gcp.compute.network", self.resource_id)
         ])
         self.assertEqual(len(self.provider.submit_calls), 1)
+
+    def _prepare_independent_cleanup(self, *, observed, now_offset):
+        self.controller.clock = lambda: self.now + timedelta(seconds=now_offset)
+        self.controller.begin_cleanup(RUN_ID, lease_owner="launcher")
+        resources = ([{
+            "surface": "compute.networks",
+            "project_id": self.intent["scope"]["project_id"],
+            "id": self.resource_id,
+        }] if observed else [])
+        self._register_inventory(resources, now_offset + 1)
+        self._acquire_reaper(now_offset + 2)
+
+    def _refresh_discovery(self, *, observed, now_offset):
+        current = self.ledger.read(RUN_ID)
+        owner = current.metadata["lease"]["owner"]
+        if owner is not None:
+            self.ledger.release_lease(
+                RUN_ID,
+                expected_generation=current.generation,
+                owner=owner,
+                now=self.now + timedelta(seconds=now_offset),
+            )
+        resources = ([{
+            "surface": "compute.networks",
+            "project_id": self.intent["scope"]["project_id"],
+            "id": self.resource_id,
+        }] if observed else [])
+        self._register_inventory(resources, now_offset)
+        self._acquire_reaper(now_offset + 1)
+
+    def _register_inventory(self, resources, now_offset):
+        register_discovered_workload_resources(
+            self.ledger,
+            RUN_ID,
+            FakeInventoryCollector(resources),
+            expected_auditor_email="independent-reader@example.com",
+            now=self.now + timedelta(seconds=now_offset),
+        )
+
+    def _acquire_reaper(self, now_offset):
+        current = self.ledger.read(RUN_ID)
+        self.ledger.acquire_lease(
+            RUN_ID,
+            expected_generation=current.generation,
+            owner="launcher",
+            now=self.now + timedelta(seconds=now_offset),
+        )
+        self.controller.clock = lambda: self.now + timedelta(seconds=now_offset + 1)
 
     def test_provider_call_requires_a_fresh_active_lease_check(self):
         with patch.object(

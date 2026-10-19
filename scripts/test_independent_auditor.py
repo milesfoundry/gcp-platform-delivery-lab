@@ -10,11 +10,13 @@ from independent_auditor import (
     AuditReportError,
     assess_workload_inventory,
     manifest_fingerprint,
+    register_discovered_workload_resources,
     record_workload_audit,
 )
+from run_contract import cleanup_plan
 from run_ledger import RunLedger
 from test_run_contract import PROJECT, RUN_ID, intent, resource
-from test_run_ledger import FakeObjectStore
+from test_run_ledger import FakeObjectStore, current_intent
 
 
 def report(
@@ -62,6 +64,113 @@ class IndependentAuditorTests(unittest.TestCase):
             result.inventory_sha256,
             assess_workload_inventory(manifest, report()).inventory_sha256,
         )
+
+    def test_authenticated_run_named_discovery_is_registered_under_auditor_lease(self):
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        manifest = current_intent()
+        store = FakeObjectStore()
+        ledger = RunLedger(store, clock=lambda: now)
+        snapshot = ledger.create(manifest)
+        snapshot = ledger.acquire_lease(
+            RUN_ID, expected_generation=snapshot.generation, owner="launcher", now=now
+        )
+        for index, state in enumerate([
+            "prepared", "project_create_requested", "project_created",
+            "billing_link_requested", "project_linked", "api_enablement",
+            "provisioning", "ready", "teardown_requested", "cleaning",
+        ], start=1):
+            candidate = deepcopy(snapshot.manifest)
+            candidate["state"] = state
+            if state == "prepared":
+                for control in candidate["controls"]:
+                    control["status"] = "present"
+            snapshot = ledger.replace(
+                RUN_ID,
+                expected_generation=snapshot.generation,
+                lease_owner="launcher",
+                manifest=candidate,
+                now=now + timedelta(seconds=index),
+            )
+        snapshot = ledger.release_lease(
+            RUN_ID,
+            expected_generation=snapshot.generation,
+            owner="launcher",
+            now=now + timedelta(seconds=20),
+        )
+        found = {
+            "surface": "compute.networks",
+            "project_id": PROJECT,
+            "id": f"projects/{PROJECT}/global/networks/{RUN_ID}-recovered",
+        }
+        unowned = {
+            "surface": "compute.networks",
+            "project_id": PROJECT,
+            "id": f"projects/{PROJECT}/global/networks/shared-network",
+        }
+        unsupported = {
+            "surface": "compute.disks",
+            "project_id": PROJECT,
+            "id": f"projects/{PROJECT}/zones/europe-west2-a/disks/{RUN_ID}-disk",
+        }
+        findings = [found, unowned, unsupported]
+
+        class Collector:
+            def collect(self, source_manifest, *, observed_at, expected_auditor_email):
+                evidence = report(
+                    run=source_manifest,
+                    resources=findings,
+                    observed_at=observed_at,
+                )
+                evidence["auditor_email"] = expected_auditor_email
+                evidence["coverage"]["compute.networks"]["resource_count"] = 2
+                evidence["coverage"]["compute.disks"]["resource_count"] = 1
+                return evidence
+
+        class IncompleteCollector:
+            def collect(self, source_manifest, *, observed_at, expected_auditor_email):
+                evidence = report(
+                    run=source_manifest,
+                    coverage={},
+                    observed_at=observed_at,
+                )
+                evidence["auditor_email"] = expected_auditor_email
+                return evidence
+
+        generation_before_incomplete = ledger.read(RUN_ID).generation
+        with self.assertRaisesRegex(AuditReportError, "incomplete inventory"):
+            register_discovered_workload_resources(
+                ledger,
+                RUN_ID,
+                IncompleteCollector(),
+                expected_auditor_email="independent-reader@example.com",
+                now=now + timedelta(seconds=29),
+            )
+        self.assertEqual(ledger.read(RUN_ID).generation, generation_before_incomplete)
+        self.assertIsNone(ledger.read(RUN_ID).metadata["lease"]["owner"])
+
+        result = register_discovered_workload_resources(
+            ledger,
+            RUN_ID,
+            Collector(),
+            expected_auditor_email="independent-reader@example.com",
+            now=now + timedelta(seconds=30),
+        )
+        self.assertEqual(result.registered_count, 1)
+        self.assertEqual(result.unregistered_count, 2)
+        self.assertEqual(result.snapshot.manifest["state"], "cleaning")
+        self.assertEqual(result.snapshot.manifest["resources"], [{
+            "type": "gcp.compute.network",
+            "id": found["id"],
+            "ownership_proof": "run_name",
+            "status": "present",
+            "delete_attempts": 0,
+        }])
+        self.assertEqual(
+            result.snapshot.manifest["discovery_receipts"][-1]["auditor_id"],
+            "google-user-12345678901234567890",
+        )
+        self.assertEqual(cleanup_plan(result.snapshot.manifest), result.snapshot.manifest["resources"])
+        self.assertIsNone(result.snapshot.metadata["lease"]["owner"])
 
     def test_missing_or_failed_surface_is_incomplete_not_empty(self):
         incomplete = report(coverage={})
