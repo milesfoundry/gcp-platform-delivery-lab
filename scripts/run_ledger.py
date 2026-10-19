@@ -1,22 +1,42 @@
-"""Generation-conditional storage for exact-path GCP run manifests.
+"""Generation-conditional storage and leases for exact-path GCP run records.
 
 The module never lists or deletes manifests and does not mutate cloud resources.
-A caller must know the run ID and expected generation for every replacement.
+A caller must know the run ID and expected object generation for every write.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+import re
 from typing import Protocol
 
 from run_contract import (
     ContractError,
+    MAX_RUN_LIFETIME,
     RUN_ID,
     next_state,
     validate_intent,
     validate_manifest,
+)
+
+
+LEDGER_SCHEMA = "portfolio.gcp-ledger.v1"
+MAX_EVENTS = 256
+MAX_LEASE = timedelta(minutes=5)
+MIN_LEASE = timedelta(seconds=15)
+OWNER = re.compile(r"^(?:launcher|reaper|operator:[a-z0-9._-]{1,64})$")
+EVENT_TYPES = frozenset(
+    {
+        "run_created",
+        "manifest_updated",
+        "lease_acquired",
+        "lease_reclaimed",
+        "lease_heartbeat",
+        "lease_released",
+    }
 )
 
 
@@ -36,6 +56,10 @@ class LedgerConflict(LedgerError):
     """An immutable run identity or transition was changed."""
 
 
+class LeaseBusy(LedgerConflict):
+    """Another unexpired owner holds the run lease."""
+
+
 class ObjectStore(Protocol):
     """Minimal conditional object API used by the run ledger."""
 
@@ -51,6 +75,7 @@ class LedgerSnapshot:
     run_id: str
     manifest: dict
     generation: int
+    metadata: dict
 
 
 def object_name(run_id: str) -> str:
@@ -70,84 +95,331 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
     result = {}
     for key, value in pairs:
         if key in result:
-            raise LedgerError(f"manifest contains a duplicate JSON key: {key}")
+            raise LedgerError(f"record contains a duplicate JSON key: {key}")
         result[key] = value
     return result
 
 
-def _decode_manifest(content: bytes) -> dict:
+def _parse_time(value: object, field: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise LedgerError(f"{field} must be a timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise LedgerError(f"{field} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise LedgerError(f"{field} must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_time(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise LedgerError("ledger time must include a timezone")
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _make_event(sequence: int, event_type: str, at: datetime) -> dict:
+    if event_type not in EVENT_TYPES:
+        raise LedgerError("event type is unsupported")
+    return {"sequence": sequence, "type": event_type, "at": _format_time(at)}
+
+
+def _initial_envelope(manifest: dict) -> dict:
+    created_at = manifest["created_at"]
+    checksum = hashlib.sha256(_canonical_json(manifest)).hexdigest()
+    return {
+        "schema": LEDGER_SCHEMA,
+        "manifest": manifest,
+        "metadata": {
+            "intent_sha256": checksum,
+            "event_sequence": 1,
+            "events": [_make_event(1, "run_created", _parse_time(created_at, "created_at"))],
+            "lease": {"owner": None, "expires_at": None},
+            "last_heartbeat_at": created_at,
+        },
+    }
+
+
+def _validate_envelope(value: object) -> tuple[dict, dict]:
+    if not isinstance(value, dict) or set(value) != {"schema", "manifest", "metadata"}:
+        raise LedgerError("ledger envelope fields are unsupported")
+    if value.get("schema") != LEDGER_SCHEMA:
+        raise LedgerError("ledger envelope schema is unsupported")
+    try:
+        manifest = validate_manifest(value.get("manifest"))
+    except ContractError as exc:
+        raise LedgerError(f"stored manifest violates the run contract: {exc}") from exc
+    metadata = value.get("metadata")
+    if not isinstance(metadata, dict) or set(metadata) != {
+        "intent_sha256", "event_sequence", "events", "lease", "last_heartbeat_at"
+    }:
+        raise LedgerError("ledger metadata fields are unsupported")
+    checksum = metadata["intent_sha256"]
+    if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+        raise LedgerError("intent_sha256 must be a SHA-256 hex digest")
+    sequence = metadata["event_sequence"]
+    events = metadata["events"]
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise LedgerError("event_sequence must be a positive integer")
+    if not isinstance(events, list) or not events or len(events) > MAX_EVENTS:
+        raise LedgerError("events must contain between one and 256 records")
+    if sequence != len(events):
+        raise LedgerError("event_sequence must equal the retained event count")
+    previous_event_time = None
+    for index, event in enumerate(events, start=1):
+        if not isinstance(event, dict) or set(event) != {"sequence", "type", "at"}:
+            raise LedgerError("event fields are unsupported")
+        if isinstance(event["sequence"], bool) or event["sequence"] != index:
+            raise LedgerError("event sequence must be contiguous and monotonic")
+        if not isinstance(event["type"], str) or event["type"] not in EVENT_TYPES:
+            raise LedgerError("event type is unsupported")
+        event_time = _parse_time(event["at"], "event.at")
+        if previous_event_time is not None and event_time < previous_event_time:
+            raise LedgerError("event timestamps must be monotonic")
+        previous_event_time = event_time
+    if events[0]["type"] != "run_created":
+        raise LedgerError("event history must begin with run_created")
+    lease = metadata["lease"]
+    if not isinstance(lease, dict) or set(lease) != {"owner", "expires_at"}:
+        raise LedgerError("lease fields are unsupported")
+    owner = lease["owner"]
+    expires_at = lease["expires_at"]
+    if owner is None:
+        if expires_at is not None:
+            raise LedgerError("an unowned lease cannot have an expiry")
+    elif not isinstance(owner, str) or not OWNER.fullmatch(owner):
+        raise LedgerError("lease owner is unsupported")
+    else:
+        expires = _parse_time(expires_at, "lease.expires_at")
+        heartbeat = _parse_time(metadata["last_heartbeat_at"], "last_heartbeat_at")
+        if expires > heartbeat + MAX_LEASE:
+            raise LedgerError("lease expiry exceeds the maximum lease duration")
+    heartbeat = _parse_time(metadata["last_heartbeat_at"], "last_heartbeat_at")
+    if heartbeat != previous_event_time:
+        raise LedgerError("last heartbeat must match the latest recorded event")
+    return manifest, metadata
+
+
+def _decode_envelope(content: bytes) -> tuple[dict, dict]:
     try:
         value = json.loads(content, object_pairs_hook=_reject_duplicate_keys)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise LedgerError("stored manifest is not valid UTF-8 JSON") from exc
-    try:
-        return validate_manifest(value)
-    except ContractError as exc:
-        raise LedgerError(f"stored manifest violates the run contract: {exc}") from exc
+        raise LedgerError("stored ledger record is not valid UTF-8 JSON") from exc
+    return _validate_envelope(value)
 
 
 class RunLedger:
-    """Create, read, and compare-and-swap one run manifest at a time."""
+    """Create, read, lease, and compare-and-swap one run at a time."""
 
     def __init__(self, store: ObjectStore, *, clock=None):
         self._store = store
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def create(self, intent: object) -> LedgerSnapshot:
-        """Create a run manifest once; safely reconcile an identical retry."""
+        """Create a run record once; reconcile an identical lost-response retry."""
         try:
             manifest = validate_intent(intent, now=self._clock())
         except ContractError as contract_error:
             raw_run_id = intent.get("run_id") if isinstance(intent, dict) else None
             object_name(raw_run_id)
             try:
-                body = _canonical_json(intent)
+                checksum = hashlib.sha256(_canonical_json(intent)).hexdigest()
                 existing = self.read(raw_run_id)
             except LedgerNotFound:
                 raise contract_error
-            if _canonical_json(existing.manifest) != body:
-                raise LedgerConflict("run ID already has a different manifest")
+            if existing.metadata["intent_sha256"] != checksum:
+                raise LedgerConflict("run ID already has a different creation intent")
             return existing
         name = object_name(manifest["run_id"])
-        body = _canonical_json(manifest)
+        envelope = _initial_envelope(manifest)
+        body = _canonical_json(envelope)
         try:
             generation = self._store.create(name, body)
-            return LedgerSnapshot(manifest["run_id"], manifest, generation)
+            return LedgerSnapshot(manifest["run_id"], manifest, generation, envelope["metadata"])
         except GenerationConflict:
-            # This handles a retry after the provider committed but its response
-            # was lost. A different payload under the same run ID is never reused.
             existing = self.read(manifest["run_id"])
-            if _canonical_json(existing.manifest) != body:
-                raise LedgerConflict("run ID already has a different manifest")
+            if existing.metadata["intent_sha256"] != envelope["metadata"]["intent_sha256"]:
+                raise LedgerConflict("run ID already has a different creation intent")
             return existing
 
     def read(self, run_id: str) -> LedgerSnapshot:
         name = object_name(run_id)
-        try:
-            content, generation = self._store.read(name)
-        except LedgerNotFound:
-            raise
+        content, generation = self._store.read(name)
         if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
             raise LedgerError("object store returned an invalid generation")
-        manifest = _decode_manifest(content)
+        manifest, metadata = _decode_envelope(content)
         if manifest["run_id"] != run_id:
             raise LedgerError("manifest run_id does not match its exact object path")
-        return LedgerSnapshot(run_id, manifest, generation)
+        return LedgerSnapshot(run_id, manifest, generation, metadata)
+
+    def _replace_envelope(
+        self, run_id: str, current: LedgerSnapshot, envelope: dict
+    ) -> LedgerSnapshot:
+        body = _canonical_json(envelope)
+        try:
+            generation = self._store.replace(
+                object_name(run_id), body, generation=current.generation
+            )
+        except GenerationConflict:
+            latest = self.read(run_id)
+            if _canonical_json({
+                "schema": LEDGER_SCHEMA,
+                "manifest": latest.manifest,
+                "metadata": latest.metadata,
+            }) == body:
+                return latest
+            raise
+        return LedgerSnapshot(run_id, envelope["manifest"], generation, envelope["metadata"])
+
+    @staticmethod
+    def _append_event(metadata: dict, event_type: str, at: datetime) -> dict:
+        updated = json.loads(json.dumps(metadata))
+        if len(updated["events"]) >= MAX_EVENTS:
+            raise LedgerConflict("event history is full; preserve the record for operator review")
+        sequence = updated["event_sequence"] + 1
+        updated["events"].append(_make_event(sequence, event_type, at))
+        updated["event_sequence"] = sequence
+        updated["last_heartbeat_at"] = _format_time(at)
+        return updated
+
+    def acquire_lease(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        owner: str,
+        now: datetime | None = None,
+        ttl: timedelta = timedelta(minutes=2),
+    ) -> LedgerSnapshot:
+        """Acquire an unheld/expired lease using an object-generation CAS."""
+        self._validate_generation(expected_generation)
+        at = now or self._clock()
+        at_text = _format_time(at)
+        if not isinstance(owner, str) or not OWNER.fullmatch(owner):
+            raise LedgerError("lease owner is unsupported")
+        self._validate_ttl(ttl)
+        current = self.read(run_id)
+        lease = current.metadata["lease"]
+        if current.generation != expected_generation:
+            if lease["owner"] == owner and lease["expires_at"] is not None:
+                lease_expiry = _parse_time(lease["expires_at"], "lease.expires_at")
+                if lease_expiry > at:
+                    return current
+            raise GenerationConflict("manifest generation is stale")
+        if lease["owner"] is not None:
+            expires = _parse_time(lease["expires_at"], "lease.expires_at")
+            if expires > at:
+                if lease["owner"] == owner:
+                    return current
+                raise LeaseBusy("another unexpired owner holds the run lease")
+        event_type = "lease_reclaimed" if lease["owner"] is not None else "lease_acquired"
+        metadata = self._append_event(current.metadata, event_type, at)
+        metadata["lease"] = {
+            "owner": owner,
+            "expires_at": _format_time(at + ttl),
+        }
+        envelope = {"schema": LEDGER_SCHEMA, "manifest": current.manifest, "metadata": metadata}
+        try:
+            return self._replace_envelope(run_id, current, envelope)
+        except GenerationConflict:
+            latest = self.read(run_id)
+            latest_lease = latest.metadata["lease"]
+            if (
+                latest_lease["owner"] == owner
+                and _parse_time(latest_lease["expires_at"], "lease.expires_at")
+                == at + ttl
+            ):
+                return latest
+            raise
+
+    def heartbeat(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        owner: str,
+        now: datetime | None = None,
+        ttl: timedelta = timedelta(minutes=2),
+    ) -> LedgerSnapshot:
+        """Extend a held lease; an expired or foreign lease cannot be revived."""
+        self._validate_generation(expected_generation)
+        at = now or self._clock()
+        self._validate_ttl(ttl)
+        current = self.read(run_id)
+        lease = current.metadata["lease"]
+        if lease["owner"] != owner or lease["expires_at"] is None:
+            raise LedgerConflict("heartbeat requires the current lease owner")
+        expires = _parse_time(lease["expires_at"], "lease.expires_at")
+        if expires <= at:
+            raise LedgerConflict("expired lease must be reacquired before heartbeat")
+        new_expiry = at + ttl
+        if current.generation != expected_generation:
+            latest_event = current.metadata["events"][-1]
+            if (
+                expires == new_expiry
+                and latest_event["type"] == "lease_heartbeat"
+                and _parse_time(latest_event["at"], "event.at") == at
+            ):
+                return current
+            raise GenerationConflict("manifest generation is stale")
+        metadata = self._append_event(current.metadata, "lease_heartbeat", at)
+        metadata["lease"] = {"owner": owner, "expires_at": _format_time(new_expiry)}
+        envelope = {"schema": LEDGER_SCHEMA, "manifest": current.manifest, "metadata": metadata}
+        try:
+            return self._replace_envelope(run_id, current, envelope)
+        except GenerationConflict:
+            latest = self.read(run_id)
+            latest_lease = latest.metadata["lease"]
+            if (
+                latest_lease["owner"] == owner
+                and _parse_time(latest_lease["expires_at"], "lease.expires_at") == new_expiry
+            ):
+                return latest
+            raise
+
+    def release_lease(
+        self,
+        run_id: str,
+        *,
+        expected_generation: int,
+        owner: str,
+        now: datetime | None = None,
+    ) -> LedgerSnapshot:
+        """Release only the caller's lease; reconcile an identical lost response."""
+        self._validate_generation(expected_generation)
+        at = now or self._clock()
+        current = self.read(run_id)
+        lease = current.metadata["lease"]
+        if lease["owner"] is None and current.generation != expected_generation:
+            return current
+        if lease["owner"] != owner:
+            raise LedgerConflict("only the current lease owner may release it")
+        if current.generation != expected_generation:
+            raise GenerationConflict("manifest generation is stale")
+        metadata = self._append_event(current.metadata, "lease_released", at)
+        metadata["lease"] = {"owner": None, "expires_at": None}
+        envelope = {"schema": LEDGER_SCHEMA, "manifest": current.manifest, "metadata": metadata}
+        try:
+            return self._replace_envelope(run_id, current, envelope)
+        except GenerationConflict:
+            latest = self.read(run_id)
+            if latest.metadata["lease"]["owner"] is None:
+                return latest
+            raise
 
     def replace(
         self,
         run_id: str,
         *,
         expected_generation: int,
+        lease_owner: str,
         manifest: object,
+        event_type: str = "manifest_updated",
+        now: datetime | None = None,
     ) -> LedgerSnapshot:
-        """Replace one manifest only if the stored generation is unchanged."""
-        if (
-            isinstance(expected_generation, bool)
-            or not isinstance(expected_generation, int)
-            or expected_generation < 1
-        ):
-            raise LedgerError("expected_generation must be a positive integer")
+        """Replace a manifest under the active lease and object generation."""
+        self._validate_generation(expected_generation)
+        at = now or self._clock()
         current = self.read(run_id)
         try:
             candidate = validate_manifest(manifest)
@@ -158,28 +430,51 @@ class RunLedger:
         for key in ("schema", "scope", "created_at", "deadline_at", "source"):
             if candidate.get(key) != current.manifest.get(key):
                 raise LedgerConflict(f"replacement cannot change immutable field {key}")
-        body = _canonical_json(candidate)
         if current.generation != expected_generation:
-            if _canonical_json(current.manifest) == body:
+            if (
+                candidate == current.manifest
+                and current.metadata["lease"]["owner"] == lease_owner
+                and current.metadata["events"][-1]["type"] == event_type
+            ):
                 return current
             raise GenerationConflict("manifest generation is stale")
+        lease = current.metadata["lease"]
+        if lease["owner"] != lease_owner or lease["expires_at"] is None:
+            raise LedgerConflict("manifest replacement requires the current lease owner")
+        if _parse_time(lease["expires_at"], "lease.expires_at") <= at:
+            raise LedgerConflict("expired lease cannot mutate the manifest")
         if candidate["state"] != current.manifest["state"]:
             try:
                 next_state(current.manifest["state"], candidate["state"])
             except ContractError as exc:
                 raise LedgerConflict(str(exc)) from exc
+        metadata = self._append_event(current.metadata, event_type, at)
+        envelope = {"schema": LEDGER_SCHEMA, "manifest": candidate, "metadata": metadata}
         try:
-            generation = self._store.replace(
-                object_name(run_id), body, generation=expected_generation
-            )
+            return self._replace_envelope(run_id, current, envelope)
         except GenerationConflict:
-            # A retry after a committed write can confirm its exact payload;
-            # any competing state remains a hard generation conflict.
             latest = self.read(run_id)
-            if _canonical_json(latest.manifest) == body:
+            if (
+                latest.manifest == candidate
+                and latest.metadata["lease"]["owner"] == lease_owner
+                and latest.metadata["events"][-1]["type"] == event_type
+            ):
                 return latest
             raise
-        return LedgerSnapshot(run_id, candidate, generation)
+
+    @staticmethod
+    def _validate_ttl(ttl: timedelta) -> None:
+        if not isinstance(ttl, timedelta) or ttl < MIN_LEASE or ttl > MAX_LEASE:
+            raise LedgerError("lease ttl must be between 15 seconds and 5 minutes")
+
+    @staticmethod
+    def _validate_generation(generation: int) -> None:
+        if (
+            isinstance(generation, bool)
+            or not isinstance(generation, int)
+            or generation < 1
+        ):
+            raise LedgerError("expected_generation must be a positive integer")
 
 
 class GcsObjectStore:

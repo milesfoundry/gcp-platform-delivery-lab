@@ -381,6 +381,15 @@ or exercised. The Cloud Storage Python client is version-pinned in
 [`scripts/requirements-recovery.txt`](../scripts/requirements-recovery.txt).
 Confirm its exact permissions and retry behavior with the isolated integration
 test before activation.
+Each ledger object now wraps the manifest in `portfolio.gcp-ledger.v1` metadata:
+an immutable intent checksum, monotonic event history, lease owner/expiry, and
+last heartbeat. Manifest mutation requires the active lease owner and exact GCS
+generation. Leases are bounded to 15 seconds–5 minutes; expired leases can be
+reclaimed by CAS, while foreign or stale writers fail closed. The 256-event
+history is never truncated; a full record stops mutation for operator review.
+The GCS object's generation returned by the provider is the authoritative
+generation token and is carried by the in-memory ledger snapshot, not guessed
+or copied into the object payload.
 The current Terraform roots use local backends at
 `bootstrap/terraform/.terraform/ephemeral-bootstrap.tfstate` and
 `infrastructure/lab/.terraform/ephemeral-lab.tfstate`; those are not durable and
@@ -496,9 +505,9 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    fields. Reject cross-project IDs, ambiguous create/link results and
    unauthorized project transitions. `scripts/run_contract_cli.py` emits only
    exact-ID dry-run plans. `scripts/run_ledger.py` implements create-only and
-   generation-conditional exact-path manifest storage with a fake-store suite;
-   event history, leases, heartbeats, state-backup metadata and restore proof
-   still need contract implementation.
+   generation-conditional exact-path manifest storage, bounded event history,
+   and CAS leases with a fake-store suite; state-backup metadata and restore
+   proof still need contract implementation.
 2. `bootstrap/terraform/`: now owns only persistent bootstrap-project APIs,
    GitHub federation, cost-alert scaffolding and lifecycle alert policies; it
    no longer owns run APIs, node identity or the Config Sync Feature. Still
@@ -516,8 +525,8 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    The reaper never reads state.
 5. New recovery-controller modules plus `scripts/run_contract.py` adapters:
    connect the create-only ledger record and all per-run recovery controls before
-   project creation; finish event/lease metadata, exact-ID discovery and provider
-   reads/deletes; separate reaper, project/billing, audit and control-reclamation
+   project creation; finish exact-ID discovery and provider reads/deletes; bind
+   reaper writes to the ledger lease; separate project/billing, audit and control-reclamation
    roles. The ledger fake covers response-loss retries and CAS conflicts; extend
    fake-provider drills for resource loss-after-create, idempotent cleanup and
    cross-run denial before any hosted credentials are added.

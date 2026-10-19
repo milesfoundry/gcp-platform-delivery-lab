@@ -7,7 +7,8 @@ CP-1 ownership matrix, run manifest, state transitions, cleanup order, failure
 cases and next implementation packet. The validator in
 `scripts/run_contract.py` and generation-CAS storage adapter in
 `scripts/run_ledger.py` are credential-free source components. The adapter has
-fake-store tests but no configured bucket, cloud identity, deployed ledger,
+fake-store tests for response-loss retries, leases, heartbeats, and stale-writer
+rejection but no configured bucket, cloud identity, deployed ledger,
 Cloud Run reaper, janitor, cleanup implementation or cloud qualification. No
 cloud resource creation is authorized by these files.
 
