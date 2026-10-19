@@ -12,7 +12,14 @@ ledger adapter has fake-store tests for response-loss retries, leases,
 heartbeats, and stale-writer rejection but no configured bucket, cloud
 identity, deployed ledger, Cloud Run reaper, workload cleanup provider adapter,
 independently administered external auditor, janitor or cloud qualification. The
-read-only `gcp_inventory_adapter.py` collects the 25 workload surfaces using
+`gcp_state_backup_adapter.py` copies exact GCS generations with source and
+destination generation preconditions, checks owning projects, UBLA, public access
+prevention, versioning and non-zero retention, and restores only to a new
+run-scoped object. Its fake transport tests are source qualification only; it has
+no launcher/ledger integration, separate-operator IAM proof, configured buckets
+or real restore receipt. Terraform roots still use local backends. Do not treat
+this adapter as authorization to copy or restore state.
+The read-only `gcp_inventory_adapter.py` collects the 25 workload surfaces using
 an explicitly supplied bearer token and injected GET-only transport.
 `gcp_closure_adapter.py` collects project, billing, API, service-account,
 budget and recovery-control closure. Both call Google's standard OpenID
@@ -233,7 +240,7 @@ because validate passes. Required outstanding gates:
    reference and 60-minute expiry. Record gross usage, net cash and projected
    credit runway. Reconcile the existing project-filtered budget, then configure
    and test each run project's cost-alert route before provisioning. The
-   schema-v4 run manifest must bind the recovery ledger bucket, reaper image
+   schema-v5 run manifest must bind the recovery ledger bucket, reaper image
    digest and exact project parent, and include a sorted
    `scope.enabled_api_services` list matching
    `infrastructure/lab`'s declared API set. It also binds the reaper identity

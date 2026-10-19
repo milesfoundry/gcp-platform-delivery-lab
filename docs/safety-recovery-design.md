@@ -830,7 +830,7 @@ CP-3. If they cannot, stop and get a concrete policy decision before activation.
 
 File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
 
-1. `scripts/run_contract.py` and its fixtures/tests: schema v4 separates
+1. `scripts/run_contract.py` and its fixtures/tests: schema v5 separates
    recovery/workload projects and reaper identities, binds the ledger bucket,
    reaper image digest, project parent and identity audience, predeclares the per-run
    controls, models project/billing phases and audits controls separately from
@@ -878,7 +878,13 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    controller init path: replace local state with the selected private GCS
    backend, create the per-run state bucket before `terraform init`, grant only
    the Terraform identity access to that bucket, and verify backup/restore.
-   The reaper never reads state.
+   The reaper never reads state. `scripts/gcp_state_backup_adapter.py` now has a
+   fake-tested, generation-pinned copy and restore-to-new-object contract; it
+   checks exact bucket/project ownership, UBLA, public access prevention,
+   versioning and configured retention. It is not wired to a launcher or ledger,
+   does not verify separate-operator IAM, and has no real backup or restore
+   receipt. Both Terraform roots still use local backends, so this packet remains
+   open.
 5. New recovery-controller modules plus `scripts/run_contract.py` adapters:
    connect the create-only ledger record and all per-run recovery controls before
    project creation; finish provider discovery, independent absence audit and

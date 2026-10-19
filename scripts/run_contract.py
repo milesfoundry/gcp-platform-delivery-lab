@@ -14,7 +14,7 @@ import re
 from urllib.parse import quote, unquote
 
 
-SCHEMA = "portfolio.gcp-run.v4"
+SCHEMA = "portfolio.gcp-run.v5"
 MAX_RUN_LIFETIME = timedelta(minutes=60)
 MAX_OPERATION_ATTEMPTS = 3
 MAX_MANIFEST_RESOURCES = 512
@@ -365,7 +365,11 @@ def validate_intent(
     if not IMAGE_DIGEST.fullmatch(image):
         raise ContractError("source.image_digest must be an immutable GHCR digest")
 
-    _validate_terraform_state(data.get("terraform_state"), run_id)
+    _validate_terraform_state(
+        data.get("terraform_state"), run_id,
+        run_project_id=project_id,
+        recovery_project_id=recovery_project_id,
+    )
     _validate_operations(
         data.get("operations"), run_id, project_id, allow_empty=new_run
     )
@@ -529,7 +533,9 @@ def validate_intent(
     return data
 
 
-def _validate_terraform_state(value: object, run_id: str) -> None:
+def _validate_terraform_state(
+    value: object, run_id: str, *, run_project_id: str, recovery_project_id: str
+) -> None:
     """Validate exact backend/backup object references and restore evidence."""
     state = _mapping(value, "terraform_state")
     _only_keys(state, {"backend", "backup", "restore_proofs"}, "terraform_state")
@@ -537,7 +543,13 @@ def _validate_terraform_state(value: object, run_id: str) -> None:
     bucket_names = set()
     for field in ("backend", "backup"):
         entry = _mapping(state.get(field), f"terraform_state.{field}")
-        _only_keys(entry, {"bucket", "object", "generation"}, f"terraform_state.{field}")
+        _only_keys(
+            entry, {"project_id", "bucket", "object", "generation"},
+            f"terraform_state.{field}",
+        )
+        project_id = _string(entry.get("project_id"), f"terraform_state.{field}.project_id")
+        if not PROJECT_ID.fullmatch(project_id):
+            raise ContractError(f"terraform_state.{field}.project_id is invalid")
         bucket = _string(entry.get("bucket"), f"terraform_state.{field}.bucket")
         if (
             not BUCKET_NAME.fullmatch(bucket)
@@ -561,6 +573,13 @@ def _validate_terraform_state(value: object, run_id: str) -> None:
                 f"terraform_state.{field}.generation must be null or a positive generation string"
             )
 
+    backend_project = state["backend"]["project_id"]
+    backup_project = state["backup"]["project_id"]
+    if backend_project != recovery_project_id:
+        raise ContractError("Terraform state backend must belong to the recovery project")
+    if backup_project in {backend_project, run_project_id}:
+        raise ContractError("Terraform state backup must be in a separate persistent project")
+
     proofs = state.get("restore_proofs")
     if not isinstance(proofs, list) or len(proofs) > 32:
         raise ContractError("terraform_state.restore_proofs must contain at most 32 records")
@@ -573,6 +592,7 @@ def _validate_terraform_state(value: object, run_id: str) -> None:
                 "snapshot", "state_generation", "backup_generation",
                 "restored_generation", "verified_at", "result",
                 "state_crc32c", "backup_crc32c", "restored_crc32c",
+                "restored_object",
             },
             f"terraform_state.restore_proofs[{index}]",
         )
@@ -597,6 +617,12 @@ def _validate_terraform_state(value: object, run_id: str) -> None:
             "passed", "failed"
         }:
             raise ContractError("restore proof result must be passed or failed")
+        restored_object = _string(proof.get("restored_object"), "restore_proof.restored_object")
+        if not re.fullmatch(
+            rf"runs/{re.escape(run_id)}/restore-proofs/[a-z0-9][a-z0-9.-]{{0,100}}\.tfstate",
+            restored_object,
+        ):
+            raise ContractError("restore proof object must be an exact run-scoped recovery copy")
         checksums = [proof.get(key) for key in (
             "state_crc32c", "backup_crc32c", "restored_crc32c"
         )]

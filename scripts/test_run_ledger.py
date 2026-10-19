@@ -1026,6 +1026,16 @@ class RunLedgerTests(unittest.TestCase):
                 manifest=moved_backend,
             )
 
+        moved_backup_project = deepcopy(original.manifest)
+        moved_backup_project["terraform_state"]["backup"]["project_id"] = "other-backup-789"
+        with self.assertRaises(LedgerConflict):
+            self.ledger.replace(
+                RUN_ID,
+                expected_generation=original.generation,
+                lease_owner="launcher",
+                manifest=moved_backup_project,
+            )
+
         moved_reaper_image = deepcopy(original.manifest)
         moved_reaper_image["cleanup"]["image_digest"] = (
             "ghcr.io/milesfoundry/gcp-reaper@sha256:" + "d" * 64
@@ -1051,6 +1061,7 @@ class RunLedgerTests(unittest.TestCase):
             "state_crc32c": "ImIEBA==",
             "backup_crc32c": "ImIEBA==",
             "restored_crc32c": "ImIEBA==",
+            "restored_object": f"runs/{RUN_ID}/restore-proofs/current-12.tfstate",
         }
         candidate["terraform_state"]["restore_proofs"].append(proof)
         recorded = self.ledger.replace(

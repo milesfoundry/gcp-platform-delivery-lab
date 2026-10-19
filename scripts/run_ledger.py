@@ -471,7 +471,7 @@ class RunLedger:
             if candidate.get(key) != current.manifest.get(key):
                 raise LedgerConflict(f"replacement cannot change immutable field {key}")
         for role in ("backend", "backup"):
-            for key in ("bucket", "object"):
+            for key in ("project_id", "bucket", "object"):
                 if (
                     candidate["terraform_state"][role][key]
                     != current.manifest["terraform_state"][role][key]

@@ -27,7 +27,7 @@ RUN_ID = "lab-20261018-a1b2"
 
 def intent():
     return {
-        "schema": "portfolio.gcp-run.v4",
+        "schema": "portfolio.gcp-run.v5",
         "run_id": RUN_ID,
         "scope": {
             "project_id": PROJECT,
@@ -86,11 +86,13 @@ def intent():
         },
         "terraform_state": {
             "backend": {
+                "project_id": "recovery-lab-456",
                 "bucket": "run-state-lab-20261018-a1b2",
                 "object": f"runs/{RUN_ID}/terraform.tfstate",
                 "generation": None,
             },
             "backup": {
+                "project_id": "portfolio-state-789",
                 "bucket": "portfolio-state-backup",
                 "object": f"runs/{RUN_ID}/terraform.tfstate",
                 "generation": None,
@@ -297,10 +299,10 @@ class RunIntentTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)
 
-    def test_schema_four_binds_recovery_bucket_project_parent_and_audience(self):
+    def test_schema_five_binds_recovery_bucket_project_parent_and_audience(self):
         candidate = intent()
         self.assertEqual(
-            validate_intent(candidate, now=NOW)["schema"], "portfolio.gcp-run.v4"
+            validate_intent(candidate, now=NOW)["schema"], "portfolio.gcp-run.v5"
         )
         for field, value in (
             ("ledger_bucket_name", "../ledger"),
@@ -389,6 +391,12 @@ class RunIntentTests(unittest.TestCase):
             with self.subTest(role=role, field=field), self.assertRaises(ContractError):
                 validate_intent(candidate, now=NOW)
 
+        for project_id in ("sample-lab-123", "recovery-lab-456", "bad/id"):
+            candidate = intent()
+            candidate["terraform_state"]["backup"]["project_id"] = project_id
+            with self.subTest(project_id=project_id), self.assertRaises(ContractError):
+                validate_intent(candidate, now=NOW)
+
     def test_state_restore_proofs_validate_generation_and_crc32c_evidence(self):
         candidate = intent()
         proof = {
@@ -401,9 +409,23 @@ class RunIntentTests(unittest.TestCase):
             "state_crc32c": "ImIEBA==",
             "backup_crc32c": "ImIEBA==",
             "restored_crc32c": "ImIEBA==",
+            "restored_object": f"runs/{RUN_ID}/restore-proofs/current-12.tfstate",
         }
         candidate["terraform_state"]["restore_proofs"] = [proof]
         self.assertEqual(validate_intent(candidate, now=NOW)["run_id"], RUN_ID)
+        candidate["terraform_state"]["restore_proofs"][0]["restored_object"] = (
+            f"runs/{RUN_ID}/terraform.tfstate"
+        )
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
+        candidate["terraform_state"]["restore_proofs"][0]["restored_object"] = (
+            f"runs/{RUN_ID}/restore-proofs/../terraform.tfstate"
+        )
+        with self.assertRaises(ContractError):
+            validate_intent(candidate, now=NOW)
+        candidate["terraform_state"]["restore_proofs"][0]["restored_object"] = (
+            f"runs/{RUN_ID}/restore-proofs/current-12.tfstate"
+        )
         candidate["terraform_state"]["restore_proofs"][0]["restored_crc32c"] = "ImIEBw=="
         with self.assertRaises(ContractError):
             validate_intent(candidate, now=NOW)

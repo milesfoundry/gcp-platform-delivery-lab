@@ -15,7 +15,7 @@ def manifest():
     project = "sample-lab-123"
     run_id = "lab-20261018-a1b2"
     value = {
-        "schema": "portfolio.gcp-run.v4",
+        "schema": "portfolio.gcp-run.v5",
         "run_id": run_id,
         "scope": {
             "project_id": project,
@@ -70,11 +70,13 @@ def manifest():
         },
         "terraform_state": {
             "backend": {
+                "project_id": "recovery-lab-456",
                 "bucket": "run-state-lab-20261018-a1b2",
                 "object": f"runs/{run_id}/terraform.tfstate",
                 "generation": None,
             },
             "backup": {
+                "project_id": "portfolio-state-789",
                 "bucket": "portfolio-state-backup",
                 "object": f"runs/{run_id}/terraform.tfstate",
                 "generation": None,
