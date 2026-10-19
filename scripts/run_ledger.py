@@ -790,6 +790,7 @@ class RunLedger:
         inventory_sha256: str,
         evidence_sha256: str,
         checks: dict,
+        observed_at: datetime | None = None,
         now: datetime | None = None,
     ) -> LedgerSnapshot:
         """Append an independent workload or closure audit receipt.
@@ -809,6 +810,10 @@ class RunLedger:
         if lease_owner != f"auditor:{auditor_id}":
             raise LedgerConflict("independent audit requires the named auditor lease")
         at = now or self._clock()
+        observed_time = observed_at or at
+        observed_at_text = _format_time(observed_time)
+        if observed_time > at:
+            raise ContractError("audit observation cannot be later than its ledger receipt")
         current = self.read(run_id)
         self._require_active_lease(current, lease_owner, at)
         if phase == "workload":
@@ -845,7 +850,6 @@ class RunLedger:
             raise ContractError("failed audit requires at least one failed check")
         if result == "incomplete" and complete:
             raise ContractError("incomplete audit cannot claim complete coverage")
-        observed_at = _format_time(at)
         stable_fields = {
             "run_id": run_id,
             "project_id": current.manifest["scope"]["project_id"],
@@ -854,7 +858,7 @@ class RunLedger:
             "result": result,
             "complete": complete,
             "auditor_id": auditor_id,
-            "observed_at": observed_at,
+            "observed_at": observed_at_text,
             "inventory_sha256": inventory_sha256,
             "evidence_sha256": evidence_sha256,
             "checks": checks,
@@ -864,7 +868,7 @@ class RunLedger:
             for receipt in current.manifest.get("audit_receipts", [])
             if receipt["phase"] == phase
             and receipt["auditor_id"] == auditor_id
-            and receipt["observed_at"] == observed_at
+            and receipt["observed_at"] == observed_at_text
         ]
         if same_observation:
             existing = same_observation[-1]
@@ -873,6 +877,9 @@ class RunLedger:
             raise LedgerConflict("audit observation key already has different evidence")
         if current.generation != expected_generation:
             raise GenerationConflict("manifest generation is stale")
+        prior_audits = current.manifest.get("audit_receipts", [])
+        if prior_audits and observed_at_text < prior_audits[-1]["observed_at"]:
+            raise ContractError("audit observation timestamps must be monotonic")
         if phase == "workload" and current.manifest["state"] != "auditing":
             raise LedgerConflict("workload audit is only accepted in auditing state")
         if phase == "closure":
@@ -900,7 +907,7 @@ class RunLedger:
             "result": result,
             "complete": complete,
             "auditor_id": auditor_id,
-            "observed_at": observed_at,
+            "observed_at": observed_at_text,
             "inventory_sha256": inventory_sha256,
             "evidence_sha256": evidence_sha256,
             "manifest_generation": current.generation,

@@ -509,6 +509,20 @@ Required manifest fields:
   write retried after response loss must reuse its timestamp, inventory and
   evidence fingerprints, and checks; the ledger reconciles the matching audit
   observation without appending a duplicate.
+- `scripts/independent_auditor.py` defines the normalized read-only report for
+  workload absence checks and binds the evidence to a fingerprint of the exact
+  manifest snapshot it inspected. A complete report must cover Compute addresses,
+  disks, firewalls, instances, networks, router NATs, routers and subnetworks;
+  GKE clusters and node pools; GKE Hub feature memberships, features and
+  memberships; Pub/Sub subscriptions and topics; and Storage buckets, objects
+  and object versions. Every surface includes pagination completeness, count
+  and response fingerprint. The assessor fingerprints normalized evidence,
+  fails on any observed resource or any manifest item not marked deleted, and
+  returns `incomplete` when a required surface is absent or only partially
+  queried. This is a strict input contract, not a GCP client: authenticated
+  provider calls, coverage completeness, service-agent/API inventory,
+  project/billing/budget checks and final control audit still need independent
+  adapter and identity qualification.
 - Gross cost estimate, measured gross usage, currency, credit balance/expiry
   observation time, net-cash estimate and later billing reconciliation reference.
 - Immutable links/checksums to sanitized evidence and an explicit limitation list.

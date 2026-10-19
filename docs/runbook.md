@@ -6,10 +6,12 @@
 CP-1 ownership matrix, run manifest, state transitions, cleanup order, failure
 cases and next implementation packet. The validator in
 `scripts/run_contract.py` and generation-CAS storage adapter in
-`scripts/run_ledger.py` are credential-free source components. The adapter has
-fake-store tests for response-loss retries, leases, heartbeats, and stale-writer
-rejection but no configured bucket, cloud identity, deployed ledger,
-Cloud Run reaper, real provider adapter, independent auditor, janitor or cloud
+`scripts/run_ledger.py` plus normalized evidence assessor in
+`scripts/independent_auditor.py` are credential-free source components. The
+ledger adapter has fake-store tests for response-loss retries, leases,
+heartbeats, and stale-writer rejection but no configured bucket, cloud
+identity, deployed ledger, Cloud Run reaper, real provider adapter,
+authenticated external inventory reader/auditor, janitor or cloud
 qualification. The manifest records deterministic provider-operation intents
 and results, including the lifecycle phase that authorized each intent; fake
 provider tests cover a committed create with a lost response and exact-ID
