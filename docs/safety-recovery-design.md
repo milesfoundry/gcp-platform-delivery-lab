@@ -10,9 +10,10 @@ The current design candidate uses one disposable Google Cloud project for each
 run, with a separate persistent recovery/FinOps project. The latter hosts the
 private durable GCS ledger, private Terraform state, and reviewed reaper image.
 Each run has its own Cloud Run Job, execution identity, Cloud Scheduler job, and
-Scheduler invocation identity in the recovery project. Create and verify these
-run controls, plus the durable `provisioning` manifest, before creating or
-linking the disposable project. The Scheduler calls
+Scheduler invocation identity in the recovery project. Write a create-only
+durable `control_bootstrapping` manifest before creating recovery controls.
+Verify the controls and transition the manifest to `prepared` before creating
+or linking the disposable project. The Scheduler calls
 `https://run.googleapis.com/v2/projects/{recovery-project}/locations/{location}/jobs/{job}:run`
 with an OAuth token and can invoke only its corresponding Job. The Job's fixed
 configuration carries its run ID, target project, and ledger object name; the

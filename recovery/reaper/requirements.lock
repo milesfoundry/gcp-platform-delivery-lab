@@ -351,6 +351,7 @@ google-auth==2.62.0 \
     --hash=sha256:0bef0ce54bdf9ce226c5d66e4264413bd918141c31bbe49fb52eac882f513d69 \
     --hash=sha256:4ff4319aeb4ad128409759d397a9fcafad126d0031d241cc0dd6b9a00b43e3f3
     # via
+    #   -r scripts/requirements-recovery.txt
     #   google-api-core
     #   google-cloud-core
     #   google-cloud-storage
@@ -446,6 +447,7 @@ requests==2.34.2 \
     --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0 \
     --hash=sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed
     # via
+    #   -r scripts/requirements-recovery.txt
     #   google-api-core
     #   google-cloud-storage
 typing-extensions==4.16.0 \

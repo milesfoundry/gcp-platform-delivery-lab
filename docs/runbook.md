@@ -193,6 +193,18 @@ The integration URL is illustrative: start a dedicated PostgreSQL test instance
 or use the hosted workflow's isolated service. The default application Compose
 database intentionally has no published host port.
 
+## Durable run registration
+
+`scripts/register_gcp_run.py` performs the first durable write for a run. It
+requires a complete `control_bootstrapping` intent, an explicitly named
+authorized-user credential file, and the expected Google email and numeric
+subject. It verifies the principal and creates only the exact run-scoped GCS
+manifest object. Repeating an identical request reconciles a lost response;
+reusing a run ID with changed intent fails. It does not apply Terraform or
+create recovery controls. See the [recovery Terraform ordering](../recovery/terraform/README.md)
+for the required sequence. No ledger bucket or operator credential is currently
+configured in this repository, so this source path has not been run against GCP.
+
 ## Before any cloud apply
 
 This is not yet an executable end-to-end cloud runbook. Do not run apply merely
@@ -208,9 +220,12 @@ because validate passes. Required outstanding gates:
    `infrastructure/lab`'s declared API set; the independent pre-deletion
    Service Usage snapshot must match it exactly.
 2. Complete and qualify the [separate identity/alert bootstrap](cloud-bootstrap.md),
-   recovery controls and private state/backup path. Terraform state is currently
-   local and is not runner-loss safe; never upload it as an artifact/cache or
-   commit it. Never commit plans, service-account keys or environment credentials.
+   recovery controls and private state/backup path. The GCS ledger adapter and
+   explicit registration command are source-tested, but no ledger bucket or
+   cloud principal is configured. Terraform state is not yet provisioned in
+   private remote storage or runner-loss recoverable; never upload it as an
+   artifact/cache or commit it. Never commit plans, service-account keys or
+   environment credentials.
 3. Qualify the selected GKE/Config Sync versions and fleet RBAC behavior.
 4. Qualify the exact janitor IAM boundary. Schema v2 and the dry-run planner
    separate recovery controls and workload inventory, but do not call Google
