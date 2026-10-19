@@ -9,8 +9,12 @@ cases and next implementation packet. The validator in
 `scripts/run_ledger.py` are credential-free source components. The adapter has
 fake-store tests for response-loss retries, leases, heartbeats, and stale-writer
 rejection but no configured bucket, cloud identity, deployed ledger,
-Cloud Run reaper, janitor, cleanup implementation or cloud qualification. No
-cloud resource creation is authorized by these files.
+Cloud Run reaper, provider adapter, cleanup controller, janitor or cloud
+qualification. The manifest records deterministic provider-operation intents
+and results, including the lifecycle phase that authorized each intent; fake
+provider tests cover a committed create with a lost response and exact-ID
+reconciliation after lease takeover. No cloud resource creation is authorized
+by these files.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources
@@ -84,11 +88,12 @@ because validate passes. Required outstanding gates:
    separate recovery controls and workload inventory, but do not call Google
    APIs or prove cross-run IAM denial. No reaper may be enabled until project
    creation, lowest-grant scopes, provider calls and negative cross-run tests pass.
-5. Implement the generation-conditional GCS ledger and out-of-band reaper; test
-   runner-loss recovery and independent inventory with a fake API before a
-   separately approved bounded cloud drill. Use the private remote state and
-   restore procedure, not local job state. Cluster deletion protection must be
-   changed explicitly for an approved teardown.
+5. Configure and qualify the generation-conditional GCS ledger, then implement
+   the GCP provider adapter, operation controller and out-of-band reaper. Extend
+   fake-provider drills to delayed responses, create/delete loss and independent
+   inventory before a separately approved bounded cloud drill. Use the private
+   remote state and restore procedure, not local job state. Cluster deletion
+   protection must be changed explicitly for an approved teardown.
 6. Add application cloud IAM, Pub/Sub/GCS resources and adapters, image release
    provenance, network policies and workload deployment.
 
