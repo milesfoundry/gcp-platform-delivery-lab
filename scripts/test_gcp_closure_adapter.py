@@ -55,6 +55,16 @@ def routes_for(manifest):
     recovery = manifest["scope"]["recovery_project_id"]
     account = manifest["finance"]["billing_account_id"]
     return {
+        "https://openidconnect.googleapis.com/v1/userinfo": [
+            FakeResponse(
+                200,
+                {
+                    "sub": "12345678901234567890",
+                    "email": "independent-reader@example.com",
+                    "email_verified": True,
+                },
+            )
+        ],
         f"https://cloudbilling.googleapis.com/v1/projects/{project_id}/billingInfo": [
             account_response(project_id, enabled=True),
             account_response(project_id, enabled=False),
@@ -205,18 +215,22 @@ class GcpClosureAdapterTests(unittest.TestCase):
             project_snapshot=snapshot,
             transport=transport,
             bearer_token="explicit-test-token",
-            auditor_id="independent-reader",
+            expected_auditor_email="independent-reader@example.com",
             clock=lambda: next(ticks),
         )
         assessment = assess_closure(manifest, report)
         self.assertEqual(assessment.result, "passed")
         self.assertEqual(len(report["coverage"]), 8)
-        self.assertEqual(len(transport.calls), 10)
+        self.assertEqual(len(transport.calls), 11)
         for url, _params, headers, timeout, allow_redirects in transport.calls:
             self.assertTrue(url.startswith("https://"))
-            self.assertEqual(headers["Authorization"], "Bearer explicit-test-token")
             self.assertEqual(timeout, 30)
             self.assertFalse(allow_redirects)
+            if url == "https://openidconnect.googleapis.com/v1/userinfo":
+                self.assertEqual(_params, {})
+                self.assertEqual(headers["Authorization"], "Bearer explicit-test-token")
+            else:
+                self.assertEqual(headers["Authorization"], "Bearer explicit-test-token")
 
     def test_paginates_project_scoped_budgets_and_retains_response_fingerprints(self):
         manifest = closure_ready_manifest()
@@ -252,7 +266,7 @@ class GcpClosureAdapterTests(unittest.TestCase):
             project_snapshot=snapshot,
             transport=transport,
             bearer_token="token",
-            auditor_id="independent-reader",
+            expected_auditor_email="independent-reader@example.com",
             clock=lambda: next(ticks),
         )
         self.assertEqual(report["coverage"]["billing.budgets"]["pages"], 2)
@@ -302,7 +316,7 @@ class GcpClosureAdapterTests(unittest.TestCase):
                 project_snapshot=project_snapshot(manifest),
                 transport=transport,
                 bearer_token="token",
-                auditor_id="independent-reader",
+                expected_auditor_email="independent-reader@example.com",
             )
 
         transport = FakeTransport(routes_for(manifest))
@@ -347,7 +361,7 @@ class GcpClosureAdapterTests(unittest.TestCase):
                 project_snapshot=snapshot,
                 transport=transport,
                 bearer_token="token",
-                auditor_id="bad space",
+                expected_auditor_email="bad space",
             )
 
         transport = FakeTransport(routes_for(manifest))
@@ -388,8 +402,51 @@ class GcpClosureAdapterTests(unittest.TestCase):
                 project_snapshot=snapshot,
                 transport=transport,
                 bearer_token="token",
-                auditor_id="independent-reader",
+                expected_auditor_email="independent-reader@example.com",
             )
+
+    def test_refuses_mismatched_token_principal_before_closure_inventory(self):
+        manifest = closure_ready_manifest()
+        routes = routes_for(manifest)
+        routes["https://openidconnect.googleapis.com/v1/userinfo"] = [
+            FakeResponse(
+                200,
+                {
+                    "sub": "99999999999999999999",
+                    "email": "someone-else@example.com",
+                    "email_verified": True,
+                },
+            )
+        ]
+        transport = FakeTransport(routes)
+        before = {
+            "project_id": manifest["scope"]["project_id"],
+            "billing_enabled": True,
+            "billing_account_id": manifest["finance"]["billing_account_id"],
+            "observed_at": "2026-10-19T01:10:00Z",
+            "response_sha256": "a" * 64,
+        }
+        after = {
+            "project_id": manifest["scope"]["project_id"],
+            "billing_enabled": False,
+            "billing_account_id": None,
+            "observed_at": "2026-10-19T01:15:00Z",
+            "response_sha256": "b" * 64,
+        }
+        with self.assertRaises(ClosureCollectionError):
+            collect_closure_report(
+                manifest,
+                billing_before=before,
+                billing_after=after,
+                project_snapshot=project_snapshot(manifest),
+                transport=transport,
+                bearer_token="token",
+                expected_auditor_email="independent-reader@example.com",
+            )
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(
+            transport.calls[0][0], "https://openidconnect.googleapis.com/v1/userinfo"
+        )
 
 
 if __name__ == "__main__":

@@ -17,13 +17,14 @@ from independent_auditor import (
     AuditReportError,
     manifest_fingerprint,
 )
+from gcp_token_identity import PRINCIPAL_EMAIL
 from run_contract import API_SERVICE, ContractError, validate_manifest
 from run_ledger import LedgerSnapshot, RunLedger
 
 
-CLOSURE_SCHEMA = "portfolio.gcp-closure.v1"
+CLOSURE_SCHEMA = "portfolio.gcp-closure.v2"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-AUDITOR_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+AUDITOR_ID = re.compile(r"^google-user-[A-Za-z0-9._~-]{1,255}$")
 BILLING_ACCOUNT = re.compile(
     r"^billingAccounts/[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}$"
 )
@@ -49,7 +50,8 @@ CONTROL_SURFACE = {
 }
 REPORT_FIELDS = {
     "schema", "run_id", "project_id", "recovery_project_id",
-    "manifest_sha256", "observed_at", "auditor_id", "coverage", "project",
+    "manifest_sha256", "observed_at", "auditor_id", "auditor_email",
+    "coverage", "project",
     "project_snapshot",
     "billing", "budget_scope", "budget_observed_at", "budgets",
     "controls_observed_at", "controls",
@@ -136,7 +138,20 @@ def assess_closure(manifest: object, report: object) -> AuditAssessment:
         )
     auditor_id = report["auditor_id"]
     if not isinstance(auditor_id, str) or AUDITOR_ID.fullmatch(auditor_id) is None:
-        raise AuditReportError("closure auditor_id is unsupported")
+        raise AuditReportError("closure auditor_id must be a verified Google user subject")
+    auditor_email = report["auditor_email"]
+    if (not isinstance(auditor_email, str)
+            or PRINCIPAL_EMAIL.fullmatch(auditor_email) is None):
+        raise AuditReportError("closure auditor_email must be a verified user email")
+    cleanup_principal = run["cleanup"]["service_account"]
+    scheduler_principal = (
+        f"{run['run_id']}-scheduler@{run['scope']['recovery_project_id']}"
+        ".iam.gserviceaccount.com"
+    )
+    if auditor_email in {cleanup_principal, scheduler_principal}:
+        raise AuditReportError(
+            "closure auditor must be distinct from reaper and scheduler identities"
+        )
     observed_text = report["observed_at"]
     observed_at = _time(observed_text, "closure observed_at")
 
@@ -364,7 +379,8 @@ def assess_closure(manifest: object, report: object) -> AuditAssessment:
         "project_id": report["project_id"],
         "recovery_project_id": report["recovery_project_id"],
         "manifest_sha256": report["manifest_sha256"], "observed_at": observed_text,
-        "auditor_id": auditor_id, "coverage": coverage, "project": project,
+        "auditor_id": auditor_id, "auditor_email": auditor_email,
+        "coverage": coverage, "project": project,
         "project_snapshot": project_snapshot,
         "billing": billing, "budget_observed_at": report["budget_observed_at"],
         "controls_observed_at": report["controls_observed_at"], "inventory": inventory,

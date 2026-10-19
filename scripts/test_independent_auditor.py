@@ -41,7 +41,8 @@ def report(
         "project_id": manifest["scope"]["project_id"],
         "manifest_sha256": manifest_fingerprint(manifest),
         "observed_at": observed_at,
-        "auditor_id": "independent-reader",
+        "auditor_id": "google-user-12345678901234567890",
+        "auditor_email": "independent-reader@example.com",
         "coverage": coverage,
         "resources": [] if resources is None else resources,
     }
@@ -126,6 +127,13 @@ class IndependentAuditorTests(unittest.TestCase):
         with self.assertRaises(AuditReportError):
             assess_workload_inventory(intent(), evidence)
 
+    def test_auditor_identity_cannot_match_run_reaper_or_scheduler(self):
+        manifest = intent()
+        evidence = report(run=manifest)
+        evidence["auditor_email"] = manifest["cleanup"]["service_account"]
+        with self.assertRaises(AuditReportError):
+            assess_workload_inventory(manifest, evidence)
+
     def test_duplicate_resource_ids_are_rejected(self):
         evidence = report()
         observed = {
@@ -179,7 +187,7 @@ class IndependentAuditorTests(unittest.TestCase):
         snapshot = ledger.acquire_lease(
             RUN_ID,
             expected_generation=snapshot.generation,
-            owner="auditor:independent-reader",
+            owner="auditor:google-user-12345678901234567890",
             now=now + timedelta(seconds=21),
         )
         evidence = report(
@@ -191,7 +199,7 @@ class IndependentAuditorTests(unittest.TestCase):
             RUN_ID,
             evidence,
             expected_generation=snapshot.generation,
-            lease_owner="auditor:independent-reader",
+            lease_owner="auditor:google-user-12345678901234567890",
             now=now + timedelta(seconds=23),
         )
         self.assertEqual(assessment.result, "passed")

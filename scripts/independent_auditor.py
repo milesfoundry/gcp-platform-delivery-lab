@@ -15,15 +15,16 @@ import re
 
 from run_contract import ContractError, validate_manifest
 from run_ledger import LedgerSnapshot, RunLedger
+from gcp_token_identity import PRINCIPAL_EMAIL
 
 
-AUDIT_SCHEMA = "portfolio.gcp-inventory.v1"
+AUDIT_SCHEMA = "portfolio.gcp-inventory.v2"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-AUDITOR_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+AUDITOR_ID = re.compile(r"^google-user-[A-Za-z0-9._~-]{1,255}$")
 RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:/._@+=,-]{0,1023}$")
 
-# These surfaces follow the current resource/ownership matrix. The future GCP
-# adapter must prove that every call covers every page and include a response
+# These surfaces follow the current resource/ownership matrix. The GCP adapter
+# must prove that every call covers every page and include a response
 # fingerprint. Additional derived-resource surfaces require a reviewed change
 # here; an adapter cannot silently widen its own completeness claim.
 WORKLOAD_SURFACES = frozenset(
@@ -58,7 +59,7 @@ WORKLOAD_SURFACES = frozenset(
 
 REPORT_FIELDS = {
     "schema", "run_id", "project_id", "manifest_sha256", "observed_at",
-    "auditor_id", "coverage", "resources",
+    "auditor_id", "auditor_email", "coverage", "resources",
 }
 COVERAGE_FIELDS = {"complete", "pages", "resource_count", "response_sha256"}
 RESOURCE_FIELDS = {"surface", "project_id", "id"}
@@ -138,7 +139,22 @@ def assess_workload_inventory(manifest: object, report: object) -> AuditAssessme
         )
     auditor_id = report["auditor_id"]
     if not isinstance(auditor_id, str) or AUDITOR_ID.fullmatch(auditor_id) is None:
-        raise AuditReportError("audit report auditor_id is unsupported")
+        raise AuditReportError(
+            "audit report auditor_id must be a verified Google user subject"
+        )
+    auditor_email = report["auditor_email"]
+    if (not isinstance(auditor_email, str)
+            or PRINCIPAL_EMAIL.fullmatch(auditor_email) is None):
+        raise AuditReportError("audit report auditor_email must be a verified user email")
+    cleanup_principal = run["cleanup"]["service_account"]
+    scheduler_principal = (
+        f"{run['run_id']}-scheduler@{run['scope']['recovery_project_id']}"
+        ".iam.gserviceaccount.com"
+    )
+    if auditor_email in {cleanup_principal, scheduler_principal}:
+        raise AuditReportError(
+            "workload auditor must be distinct from reaper and scheduler identities"
+        )
     observed_at = report["observed_at"]
     if not isinstance(observed_at, str):
         raise AuditReportError("audit report observed_at must be a timestamp")
@@ -239,6 +255,7 @@ def assess_workload_inventory(manifest: object, report: object) -> AuditAssessme
             "manifest_sha256": report["manifest_sha256"],
             "observed_at": observed_at,
             "auditor_id": auditor_id,
+            "auditor_email": auditor_email,
             "coverage": normalized_coverage,
             "resources": normalized_resources,
         }

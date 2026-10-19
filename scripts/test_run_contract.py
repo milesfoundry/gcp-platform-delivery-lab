@@ -129,7 +129,7 @@ def audit_receipt(sequence, phase, *, checks=None, result="passed", complete=Tru
         "phase": phase,
         "result": result,
         "complete": complete,
-        "auditor_id": "external-auditor",
+        "auditor_id": "google-user-12345678901234567890",
         "observed_at": f"2026-10-18T12:{sequence:02}:00Z",
         "inventory_sha256": "a" * 64,
         "evidence_sha256": "b" * 64,

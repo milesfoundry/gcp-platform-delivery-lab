@@ -15,11 +15,15 @@ from typing import Callable, Protocol
 from urllib.parse import quote, urlsplit
 
 from closure_auditor import (
-    AUDITOR_ID,
     CLOSURE_SCHEMA,
     assess_closure,
 )
 from independent_auditor import AuditReportError, manifest_fingerprint
+from gcp_token_identity import (
+    IdentityVerificationError,
+    PRINCIPAL_EMAIL,
+    verify_access_token_principal,
+)
 from run_contract import ContractError, validate_manifest
 
 
@@ -54,6 +58,7 @@ API_HOSTS = frozenset(
         "run.googleapis.com",
         "cloudscheduler.googleapis.com",
         "iam.googleapis.com",
+        "openidconnect.googleapis.com",
     }
 )
 MAX_PAGES = 10_000
@@ -334,7 +339,7 @@ def collect_closure_report(
     project_snapshot: object,
     transport: ReadOnlyTransport,
     bearer_token: str,
-    auditor_id: str,
+    expected_auditor_email: str,
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> dict:
     """Collect full project/budget/control closure coverage without mutations."""
@@ -362,10 +367,25 @@ def collect_closure_report(
         raise ClosureCollectionError(
             "pre-deletion inventory belongs to a different project"
         )
-    if not isinstance(auditor_id, str) or AUDITOR_ID.fullmatch(auditor_id) is None:
-        raise ClosureCollectionError("auditor_id is unsupported")
+    if (not isinstance(expected_auditor_email, str)
+            or PRINCIPAL_EMAIL.fullmatch(expected_auditor_email) is None):
+        raise ClosureCollectionError("expected auditor email is malformed")
     if not isinstance(bearer_token, str) or not bearer_token.strip():
         raise ClosureCollectionError("an explicit non-empty bearer token is required")
+    cleanup_principal = run["cleanup"]["service_account"]
+    scheduler_principal = (
+        f"{run['run_id']}-scheduler@{recovery_project_id}.iam.gserviceaccount.com"
+    )
+    if expected_auditor_email in {cleanup_principal, scheduler_principal}:
+        raise ClosureCollectionError(
+            "closure auditor must be distinct from reaper and scheduler identities"
+        )
+    try:
+        verified_user = verify_access_token_principal(
+            transport, bearer_token, expected_email=expected_auditor_email
+        )
+    except IdentityVerificationError as exc:
+        raise ClosureCollectionError(str(exc)) from None
 
     project_url = _url(
         "cloudresourcemanager.googleapis.com",
@@ -478,7 +498,8 @@ def collect_closure_report(
         "recovery_project_id": recovery_project_id,
         "manifest_sha256": manifest_fingerprint(run),
         "observed_at": observed_at,
-        "auditor_id": auditor_id,
+        "auditor_id": verified_user.auditor_id,
+        "auditor_email": verified_user.email,
         "coverage": coverage,
         "project": {
             "exists": project_exists,

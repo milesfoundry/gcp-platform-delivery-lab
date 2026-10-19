@@ -17,9 +17,13 @@ from urllib.parse import quote, urlsplit
 
 from independent_auditor import (
     AUDIT_SCHEMA,
-    AUDITOR_ID,
     WORKLOAD_SURFACES,
     manifest_fingerprint,
+)
+from gcp_token_identity import (
+    IdentityVerificationError,
+    PRINCIPAL_EMAIL,
+    verify_access_token_principal,
 )
 
 
@@ -233,15 +237,25 @@ class GCPInventoryAdapter:
             aggregated_resource_key=aggregated_key,
         )
 
-    def collect(self, manifest: dict, *, observed_at: str, auditor_id: str) -> dict:
+    def collect(
+        self, manifest: dict, *, observed_at: str, expected_auditor_email: str,
+    ) -> dict:
         """Return normalized, exact-project evidence or fail without a report."""
         manifest_sha256 = manifest_fingerprint(manifest)
         run_id = manifest.get("run_id")
         project_id = manifest.get("scope", {}).get("project_id")
         if not isinstance(project_id, str) or not project_id:
             raise InventoryCollectionError("manifest has no exact GCP project ID")
-        if not isinstance(auditor_id, str) or AUDITOR_ID.fullmatch(auditor_id) is None:
-            raise InventoryCollectionError("auditor ID is malformed")
+        if (not isinstance(expected_auditor_email, str)
+                or PRINCIPAL_EMAIL.fullmatch(expected_auditor_email) is None):
+            raise InventoryCollectionError("expected auditor email is malformed")
+        try:
+            verified_user = verify_access_token_principal(
+                self._transport, self._token,
+                expected_email=expected_auditor_email,
+            )
+        except IdentityVerificationError as exc:
+            raise InventoryCollectionError(str(exc)) from None
         if not isinstance(observed_at, str):
             raise InventoryCollectionError(
                 "observation time must be an ISO-8601 timestamp"
@@ -506,7 +520,8 @@ class GCPInventoryAdapter:
             "project_id": project_id,
             "manifest_sha256": manifest_sha256,
             "observed_at": observed_at,
-            "auditor_id": auditor_id,
+            "auditor_id": verified_user.auditor_id,
+            "auditor_email": verified_user.email,
             "coverage": coverage,
             "resources": normalized,
         }

@@ -11,13 +11,18 @@ cases and next implementation packet. The validator in
 ledger adapter has fake-store tests for response-loss retries, leases,
 heartbeats, and stale-writer rejection but no configured bucket, cloud
 identity, deployed ledger, Cloud Run reaper, workload cleanup provider adapter,
-authenticated external auditor, janitor or cloud qualification. The
+independently administered external auditor, janitor or cloud qualification. The
 read-only `gcp_inventory_adapter.py` collects the 25 workload surfaces using
-an explicitly supplied bearer token and injected GET-only transport; its
-mocked transport tests do not establish live IAM, API enablement, complete
-provider behavior, or an authenticated auditor identity. It does not cover
-service agents/API enablement, project/billing/budget closure, or recovery
-control inventory. The manifest records deterministic provider-operation intents
+an explicitly supplied bearer token and injected GET-only transport.
+`gcp_closure_adapter.py` collects project, billing, API, service-account,
+budget and recovery-control closure. Both call Google's standard OpenID
+Connect UserInfo endpoint and require its verified email to match the expected
+auditor email supplied by the caller. Receipts identify the user by Google's
+stable `sub`; the email is retained in the normalized report. The auditor must
+differ from the per-run reaper and scheduler identities. Only human Google user
+tokens with the required `openid` and `email` scopes are supported; other
+identities fail closed. Mocked tests do not establish live IAM, API enablement,
+provider behavior or an independently administered auditor account. The manifest records deterministic provider-operation intents
 and results, including the lifecycle phase that authorized each intent; fake
 provider tests cover a committed create with a lost response and exact-ID
 reconciliation after lease takeover. Append-only progress receipts retain the

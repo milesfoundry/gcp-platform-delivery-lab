@@ -30,6 +30,12 @@ class FakeTransport:
 
     @staticmethod
     def empty_inventory(url, params):
+        if url == "https://openidconnect.googleapis.com/v1/userinfo":
+            return {
+                "sub": "12345678901234567890",
+                "email": "independent-reader@example.com",
+                "email_verified": True,
+            }
         if "/aggregated/" in url:
             return {"items": {}}
         if url.endswith("/clusters"):
@@ -69,7 +75,7 @@ class GCPInventoryAdapterTests(unittest.TestCase):
         ).collect(
             manifest,
             observed_at="2026-10-19T02:00:00Z",
-            auditor_id="independent-reader",
+            expected_auditor_email="independent-reader@example.com",
         )
 
         self.assertEqual(set(report["coverage"]), WORKLOAD_SURFACES)
@@ -79,8 +85,18 @@ class GCPInventoryAdapterTests(unittest.TestCase):
             all(entry["pages"] >= 1 for entry in report["coverage"].values())
         )
         self.assertEqual(assess_workload_inventory(manifest, report).result, "passed")
+        api_calls = [
+            call for call in transport.calls
+            if call[0] != "https://openidconnect.googleapis.com/v1/userinfo"
+        ]
         self.assertTrue(all(call[2]["Authorization"] == "Bearer short-lived-test-token"
-                            for call in transport.calls))
+                            for call in api_calls))
+        identity_call = next(
+            call for call in transport.calls
+            if call[0] == "https://openidconnect.googleapis.com/v1/userinfo"
+        )
+        self.assertEqual(identity_call[1], {})
+        self.assertEqual(identity_call[2]["Authorization"], "Bearer short-lived-test-token")
         self.assertTrue(all(call[3] == 30 for call in transport.calls))
         self.assertTrue(all(call[4] is False for call in transport.calls))
 
@@ -114,10 +130,31 @@ class GCPInventoryAdapterTests(unittest.TestCase):
                 _response_pages(transport, url, token="must-not-leak")
         self.assertEqual(transport.calls, [])
 
+    def test_refuses_token_for_a_different_auditor_before_inventory_collection(self):
+        transport = FakeTransport()
+        with self.assertRaises(InventoryCollectionError):
+            GCPInventoryAdapter(
+                transport, access_token="short-lived-test-token"
+            ).collect(
+                intent(),
+                observed_at="2026-10-19T02:00:00Z",
+                expected_auditor_email="different-person@example.com",
+            )
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(
+            transport.calls[0][0], "https://openidconnect.googleapis.com/v1/userinfo"
+        )
+
     def test_provider_collection_keys_and_derived_resources_are_normalized(self):
         manifest = intent()
 
         def populated(url, _params):
+            if url == "https://openidconnect.googleapis.com/v1/userinfo":
+                return {
+                    "sub": "12345678901234567890",
+                    "email": "independent-reader@example.com",
+                    "email_verified": True,
+                }
             if "/aggregated/routers" in url:
                 return {"items": {"regions/europe-west2": {"routers": [{
                     "selfLink": (
@@ -185,7 +222,7 @@ class GCPInventoryAdapterTests(unittest.TestCase):
         report = GCPInventoryAdapter(
             FakeTransport(populated), access_token="short-lived-test-token"
         ).collect(
-            manifest, observed_at="2026-10-19T02:00:00Z", auditor_id="reader"
+            manifest, observed_at="2026-10-19T02:00:00Z", expected_auditor_email="independent-reader@example.com"
         )
         resources = {(item["surface"], item["id"]) for item in report["resources"]}
         self.assertIn(
@@ -296,7 +333,7 @@ class GCPInventoryAdapterTests(unittest.TestCase):
         adapter = GCPInventoryAdapter(FakeTransport(fail_one), access_token="token")
         with self.assertRaisesRegex(InventoryCollectionError, "HTTP 403"):
             adapter.collect(
-                intent(), observed_at="2026-10-19T02:00:00Z", auditor_id="reader"
+                intent(), observed_at="2026-10-19T02:00:00Z", expected_auditor_email="independent-reader@example.com"
             )
 
     def test_adapter_requires_an_explicit_token_and_exact_project(self):
@@ -307,7 +344,7 @@ class GCPInventoryAdapterTests(unittest.TestCase):
         adapter = GCPInventoryAdapter(FakeTransport(), access_token="token")
         with self.assertRaises(ValueError):
             adapter.collect(
-                malformed, observed_at="2026-10-19T02:00:00Z", auditor_id="reader"
+                malformed, observed_at="2026-10-19T02:00:00Z", expected_auditor_email="independent-reader@example.com"
             )
 
 

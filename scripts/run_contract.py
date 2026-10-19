@@ -962,9 +962,10 @@ def validate_manifest(manifest: object) -> dict:
             raise ContractError("incomplete audit receipt cannot claim complete coverage")
         auditor_id = receipt["auditor_id"]
         if not isinstance(auditor_id, str) or re.fullmatch(
-            r"[a-z0-9][a-z0-9._-]{0,63}", auditor_id
+            r"google-user-[A-Za-z0-9._~-]{1,255}",
+            auditor_id,
         ) is None:
-            raise ContractError("audit receipt auditor_id is unsupported")
+            raise ContractError("audit receipt auditor_id must be a Google user subject")
         observed_at = _timestamp(receipt["observed_at"], "audit receipt observed_at")
         if previous_time is not None and observed_at < previous_time:
             raise ContractError("audit receipt timestamps must be monotonic")

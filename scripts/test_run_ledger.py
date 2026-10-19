@@ -183,7 +183,7 @@ class RunLedgerTests(unittest.TestCase):
         return self.ledger.acquire_lease(
             RUN_ID,
             expected_generation=snapshot.generation,
-            owner="auditor:external-auditor",
+            owner="auditor:google-user-12345678901234567890",
             now=self.now + timedelta(seconds=31),
         )
 
@@ -708,8 +708,8 @@ class RunLedgerTests(unittest.TestCase):
         audited = self.ledger.record_independent_audit(
             RUN_ID,
             expected_generation=snapshot.generation,
-            lease_owner="auditor:external-auditor",
-            auditor_id="external-auditor",
+            lease_owner="auditor:google-user-12345678901234567890",
+            auditor_id="google-user-12345678901234567890",
             phase="workload",
             result="passed",
             complete=True,
@@ -738,7 +738,7 @@ class RunLedgerTests(unittest.TestCase):
             self.ledger.replace(
                 RUN_ID,
                 expected_generation=audited.generation,
-                lease_owner="auditor:external-auditor",
+                lease_owner="auditor:google-user-12345678901234567890",
                 manifest=changed,
                 now=self.now + timedelta(seconds=33),
             )
@@ -748,8 +748,8 @@ class RunLedgerTests(unittest.TestCase):
         self.store.fail_after_replace = True
         arguments = {
             "expected_generation": snapshot.generation,
-            "lease_owner": "auditor:external-auditor",
-            "auditor_id": "external-auditor",
+            "lease_owner": "auditor:google-user-12345678901234567890",
+            "auditor_id": "google-user-12345678901234567890",
             "phase": "workload",
             "result": "passed",
             "complete": True,
@@ -775,7 +775,7 @@ class RunLedgerTests(unittest.TestCase):
         snapshot = self.lease_in_auditing()
         arguments = {
             "expected_generation": snapshot.generation,
-            "auditor_id": "external-auditor",
+            "auditor_id": "google-user-12345678901234567890",
             "phase": "workload",
             "result": "passed",
             "complete": True,
@@ -791,7 +791,7 @@ class RunLedgerTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             self.ledger.record_independent_audit(
                 RUN_ID,
-                lease_owner="auditor:external-auditor",
+                lease_owner="auditor:google-user-12345678901234567890",
                 **{**arguments, "checks": {"resources_absent": True}},
             )
 
@@ -800,8 +800,8 @@ class RunLedgerTests(unittest.TestCase):
         workload = self.ledger.record_independent_audit(
             RUN_ID,
             expected_generation=snapshot.generation,
-            lease_owner="auditor:external-auditor",
-            auditor_id="external-auditor",
+            lease_owner="auditor:google-user-12345678901234567890",
+            auditor_id="google-user-12345678901234567890",
             phase="workload",
             result="passed",
             complete=True,
@@ -813,7 +813,7 @@ class RunLedgerTests(unittest.TestCase):
         workload = self.ledger.release_lease(
             RUN_ID,
             expected_generation=workload.generation,
-            owner="auditor:external-auditor",
+            owner="auditor:google-user-12345678901234567890",
             now=self.now + timedelta(seconds=33),
         )
         operator = self.ledger.acquire_lease(
@@ -842,14 +842,14 @@ class RunLedgerTests(unittest.TestCase):
         auditor = self.ledger.acquire_lease(
             RUN_ID,
             expected_generation=operator.generation,
-            owner="auditor:external-auditor",
+            owner="auditor:google-user-12345678901234567890",
             now=self.now + timedelta(seconds=37),
         )
         closure = self.ledger.record_independent_audit(
             RUN_ID,
             expected_generation=auditor.generation,
-            lease_owner="auditor:external-auditor",
-            auditor_id="external-auditor",
+            lease_owner="auditor:google-user-12345678901234567890",
+            auditor_id="google-user-12345678901234567890",
             phase="closure",
             result="passed",
             complete=True,
@@ -871,7 +871,7 @@ class RunLedgerTests(unittest.TestCase):
         closed = self.ledger.replace(
             RUN_ID,
             expected_generation=closure.generation,
-            lease_owner="auditor:external-auditor",
+            lease_owner="auditor:google-user-12345678901234567890",
             manifest=candidate,
             now=self.now + timedelta(seconds=39),
         )
@@ -886,7 +886,7 @@ class RunLedgerTests(unittest.TestCase):
             self.ledger.replace(
                 RUN_ID,
                 expected_generation=closed.generation,
-                lease_owner="auditor:external-auditor",
+                lease_owner="auditor:google-user-12345678901234567890",
                 manifest=changed,
                 now=self.now + timedelta(seconds=40),
             )

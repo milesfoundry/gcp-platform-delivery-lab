@@ -56,7 +56,8 @@ def report(*, manifest=None, coverage=None, budgets=None, controls=None):
         "recovery_project_id": run["scope"]["recovery_project_id"],
         "manifest_sha256": manifest_fingerprint(run),
         "observed_at": "2026-10-19T01:30:00Z",
-        "auditor_id": "independent-reader",
+        "auditor_id": "google-user-12345678901234567890",
+        "auditor_email": "independent-reader@example.com",
         "coverage": coverage,
         "project_snapshot": {
             "project_id": run["scope"]["project_id"],
@@ -169,6 +170,13 @@ class ClosureAuditorTests(unittest.TestCase):
         run = closure_ready_manifest()
         evidence = report(manifest=run)
         evidence["budget_scope"] = "projects/some-other-project"
+        with self.assertRaises(AuditReportError):
+            assess_closure(run, evidence)
+
+    def test_auditor_identity_cannot_match_run_reaper_or_scheduler(self):
+        run = closure_ready_manifest()
+        evidence = report(manifest=run)
+        evidence["auditor_email"] = run["cleanup"]["service_account"]
         with self.assertRaises(AuditReportError):
             assess_closure(run, evidence)
 

@@ -32,7 +32,8 @@ MAX_EVENTS = 1024
 MAX_LEASE = timedelta(minutes=5)
 MIN_LEASE = timedelta(seconds=15)
 OWNER = re.compile(
-    r"^(?:launcher|reaper|operator:[a-z0-9._-]{1,64}|auditor:[a-z0-9._-]{1,64})$"
+    r"^(?:launcher|reaper|operator:[a-z0-9._-]{1,64}|auditor:"
+    r"google-user-[A-Za-z0-9._~-]{1,255})$"
 )
 EVENT_TYPES = frozenset(
     {
@@ -797,16 +798,19 @@ class RunLedger:
 
         The caller supplies digests for the external inventory and evidence
         artifact; raw provider listings remain outside the run manifest. The
-        auditor must hold a separately named lease. Mapping cloud principals
-        to this owner name remains the responsibility of a future adapter. A
-        retry after a lost write response must reuse the same observation time,
-        fingerprints and checks so it reconciles to the original receipt.
+        auditor must hold a separately named lease and provide Google's stable
+        user subject. GCP collectors verify the expected email through UserInfo,
+        but this local ledger contract does not authenticate the cloud API
+        caller. A retry after a lost write response must reuse the same
+        observation time, fingerprints and checks so it reconciles to the
+        original receipt.
         """
         self._validate_generation(expected_generation)
         if not isinstance(auditor_id, str) or re.fullmatch(
-            r"[a-z0-9][a-z0-9._-]{0,63}", auditor_id
+            r"google-user-[A-Za-z0-9._~-]{1,255}",
+            auditor_id,
         ) is None:
-            raise ContractError("audit receipt auditor_id is unsupported")
+            raise ContractError("audit receipt auditor_id must be a Google user subject")
         if lease_owner != f"auditor:{auditor_id}":
             raise LedgerConflict("independent audit requires the named auditor lease")
         at = now or self._clock()

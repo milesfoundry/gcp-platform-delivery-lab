@@ -536,9 +536,18 @@ Required manifest fields:
   grants, API enablement, or pagination under real inventory. The service-agent
   and API inventories and project/billing/budget closure now have normalized
   report contracts and mocked read-only adapters, but still need live API and
-  permission qualification. Principal-to-auditor binding, exact budget
-  ownership reconciliation, external audit identity, and cleanup mutations
-  remain open.
+  permission qualification. `scripts/gcp_token_identity.py` calls Google's
+  standard OpenID Connect UserInfo endpoint and requires a verified expected
+  email plus the stable Google `sub`. The closure assessor records the subject
+  in the audit receipt, retains the verified email in the evidence report, and
+  rejects the per-run reaper/scheduler identities. Only human Google user tokens
+  with the `openid` and `email` scopes are supported; workload, service-account,
+  and federated identities fail closed. This is source/mock qualification only;
+  it does not provision or independently authorize an auditor account or bind a
+  Cloud IAM/API caller to the ledger lease. Exact budget ownership reconciliation
+  and cleanup mutations also remain open. See Google's
+  [OpenID Connect UserInfo endpoint](https://developers.google.com/identity/openid-connect/reference#userinfo)
+  and [token types](https://docs.cloud.google.com/docs/authentication/token-types).
   `scripts/closure_auditor.py` now defines a separate credential-free closure
   report bound to the exact manifest. It requires complete pre-deletion
   Service Usage enabled-API and run-project service-account inventories, then
@@ -561,8 +570,8 @@ Required manifest fields:
   and recovery-project service accounts. It fails on non-200 responses except
   the expected absent-project 404, malformed resources, warnings, or partial
   pagination. Mock transport tests prove request policy and normalization only.
-  No live API adapter behavior, IAM, principal binding, or budget-object
-  ownership reconciliation is qualified. IAM's service-account list proves
+  No live API adapter behavior, IAM, human principal verification, or
+  budget-object ownership reconciliation is qualified. IAM's service-account list proves
   there are no active listed identities; deletion remains recoverable for up
   to 30 days, so retain the exact delete receipt and record that provider
   recovery window rather than claiming the tombstone was immediately purged.
@@ -709,8 +718,8 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    project/billing, audit and control-reclamation roles. Ordered cleanup now
    resumes pending operations. Append-only generation-bound audit receipts are
    now part of the ledger contract, but external inventory discovery, billing/
-   project checks, identity-to-auditor authentication and the real provider
-   adapter remain open. The
+   project checks, independently administered auditor identity, API-to-ledger
+   principal binding, and the real provider adapter remain open. The
    ledger fake covers response-loss retries and CAS conflicts; extend
    fake-provider drills for resource loss-after-create, idempotent cleanup and
    cross-run denial before any hosted credentials are added.
