@@ -543,10 +543,25 @@ Required manifest fields:
   `projects/{run_project_id}` so a complete empty result proves no project-scoped
   budgets remain; the separately existing bootstrap-project budget is outside
   this run-project scope and is not treated as run-owned. This is a normalized
-  evidence contract only: no live API adapter, IAM, principal binding, or
-  budget-object ownership reconciliation is qualified. See Google's
+  `scripts/gcp_closure_adapter.py` now collects that contract through an
+  explicit-token, GET-only transport: Resource Manager project lookup, both
+  retained billing-info snapshots, the project-scoped Billing Budgets list,
+  Cloud Run Jobs (including unexpired deleted records), Cloud Scheduler jobs,
+  and recovery-project service accounts. It fails on non-200 responses except
+  the expected absent-project 404, malformed resources, warnings, or partial
+  pagination. Mock transport tests prove request policy and normalization only.
+  No live API adapter behavior, IAM, principal binding, or budget-object
+  ownership reconciliation is qualified. IAM's service-account list proves
+  there are no active listed identities; deletion remains recoverable for up
+  to 30 days, so retain the exact delete receipt and record that provider
+  recovery window rather than claiming the tombstone was immediately purged.
+  See Google's
   [project billing info](https://docs.cloud.google.com/billing/docs/reference/rest/v1/projects/getBillingInfo)
-  and [budget list scope](https://docs.cloud.google.com/billing/docs/reference/budget/rest/v1/billingAccounts.budgets/list)
+  and [budget list scope](https://docs.cloud.google.com/billing/docs/reference/budget/rest/v1/billingAccounts.budgets/list),
+  [Cloud Run Jobs list](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.jobs/list),
+  [Scheduler jobs list](https://docs.cloud.google.com/scheduler/docs/reference/rest/v1/projects.locations.jobs/list),
+  [service accounts list](https://docs.cloud.google.com/iam/docs/reference/rest/v1/projects.serviceAccounts/list),
+  and [service-account deletion recovery](https://docs.cloud.google.com/iam/docs/service-accounts-delete-undelete)
   references.
   The REST resource/response mapping follows Google's primary references for
   [Compute aggregated lists](https://docs.cloud.google.com/compute/docs/reference/rest/v1/addresses/aggregatedList),
