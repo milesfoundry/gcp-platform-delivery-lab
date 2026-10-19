@@ -49,7 +49,13 @@ auditor lease before cleanup; API-to-ledger principal binding, IAM isolation and
 live provider behavior remain unqualified. GCS deletion verifies
 the project number, bucket ownership and London bucket location; it requires an
 explicit zero-duration soft-delete policy and rejects buckets with active soft
-delete retention. No cloud resource creation is authorized by these files.
+delete retention. `gcp_project_lifecycle_adapter.py` now provides source-level
+exact-run project creation, reviewed billing association/removal, and API
+enablement for the manifest's sorted allowlist. It uses an explicit short-lived
+token source and HTTPS transport, with fake tests for exact IDs, parent, run
+labels, billing account and operation scope. It does not delete projects and is
+not wired to a deployed launcher or live GCP identity. Its presence does not
+authorize cloud activation; no cloud API call is made by CI or this runbook.
 Fake controller tests cover a create committed before a lost response,
 cross-run project-ID rejection before provider access, and repeated cleanup
 after a confirmed delete without a second delete call. These verify the local

@@ -567,6 +567,25 @@ Required manifest fields:
   connected in a deployed runtime. See Google's
   [OpenID Connect UserInfo endpoint](https://developers.google.com/identity/openid-connect/reference#userinfo)
   and [token types](https://docs.cloud.google.com/docs/authentication/token-types).
+  `scripts/gcp_project_lifecycle_adapter.py` now supports the first provider
+  lifecycle mutations: exact-ID project creation under one configured folder
+  or organization, billing link/unlink for one configured billing account, and
+  API enablement from the manifest allowlist. It returns scoped long-running
+  operation names for Resource Manager and Service Usage and reconciles exact
+  project parent/run labels, billing state and enabled service state. Fake
+  transport tests cover target/parent/account/API rejection and async polling.
+  The v3 Project schema uses `displayName` and `state`; the Billing API request
+  sends only writable `billingAccountName`, omitting output-only fields.
+  The adapter has no project-delete path, is not deployed or wired to a trusted
+  launcher, and does not solve creator Owner grants, billing-budget preflight,
+  or independent principal-to-ledger binding. It remains unqualified for live
+  use. Google documents project creation as a separate asynchronous operation
+  from billing association; billing association can enable charges. See the
+  [projects.create API](https://docs.cloud.google.com/resource-manager/reference/rest/v3/projects/create),
+  [v3 Project schema](https://docs.cloud.google.com/resource-manager/reference/rest/v3/projects),
+  [billing association API](https://docs.cloud.google.com/billing/docs/reference/rest/v1/projects/updateBillingInfo),
+  [ProjectBillingInfo schema](https://docs.cloud.google.com/billing/docs/reference/rest/v1/ProjectBillingInfo),
+  and [Service Usage enable API](https://docs.cloud.google.com/service-usage/docs/reference/rest/v1/services/enable).
   `scripts/closure_auditor.py` now defines a separate credential-free closure
   report bound to the exact manifest. It requires complete pre-deletion
   Service Usage enabled-API and run-project service-account inventories, then
