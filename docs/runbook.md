@@ -9,7 +9,7 @@ cases and next implementation packet. The validator in
 `scripts/run_ledger.py` are credential-free source components. The adapter has
 fake-store tests for response-loss retries, leases, heartbeats, and stale-writer
 rejection but no configured bucket, cloud identity, deployed ledger,
-Cloud Run reaper, provider adapter, cleanup controller, janitor or cloud
+Cloud Run reaper, real provider adapter, independent auditor, janitor or cloud
 qualification. The manifest records deterministic provider-operation intents
 and results, including the lifecycle phase that authorized each intent; fake
 provider tests cover a committed create with a lost response and exact-ID
@@ -17,8 +17,9 @@ reconciliation after lease takeover. Append-only progress receipts retain the
 provider operation name for accepted asynchronous requests without marking them
 complete; only a terminal result resolves an intent. The credential-free
 `recovery_controller.py` submits once or resumes by polling/inspecting through
-an injected provider adapter. It has no GCP adapter and cannot create resources
-itself. No cloud resource creation is authorized by these files.
+an injected provider adapter, and can run ordered cleanup against that adapter.
+It has no GCP adapter and cannot create resources itself. No cloud resource
+creation is authorized by these files.
 
 Workload provider operations must target an exact `(type, id)` already declared
 in the run manifest inventory. A terminal successful create or delete result and
@@ -27,8 +28,11 @@ one generation-CAS replacement. Failed or unresolved operations leave inventory
 status unchanged. `RecoveryController.cleanup()` switches a requested teardown
 to `cleaning`, follows the manifest's reverse dependency order, resumes the same
 pending delete after takeover, and stops on the first failed, running or
-unresolved operation. Independent discovery/audit, control reclamation and a
-real provider adapter remain unimplemented.
+unresolved operation. A run cannot start a new create at or after its fixed
+deadline; an already-persisted create remains reconcilable. Provider attempts
+are capped at three, after which cleanup records `incomplete`. Independent
+discovery/audit, control reclamation and a real provider adapter remain
+unimplemented.
 
 The 2026-10-18 IAM review found that the current shared lab-project layout
 does not yet prove a reaper can delete its run's Compute network resources

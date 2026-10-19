@@ -15,6 +15,7 @@ import re
 
 SCHEMA = "portfolio.gcp-run.v2"
 MAX_RUN_LIFETIME = timedelta(minutes=60)
+MAX_OPERATION_ATTEMPTS = 3
 RUN_ID = re.compile(r"^lab-[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$")
 PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 REVISION = re.compile(r"^[0-9a-f]{40}$")
@@ -559,8 +560,15 @@ def _validate_operations(
                 f"operations[{index - 1}]",
             )
             attempt = event.get("attempt")
-            if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
-                raise ContractError("provider operation attempt must be a positive integer")
+            if (
+                isinstance(attempt, bool)
+                or not isinstance(attempt, int)
+                or attempt < 1
+                or attempt > MAX_OPERATION_ATTEMPTS
+            ):
+                raise ContractError(
+                    f"provider operation attempt must be from 1 to {MAX_OPERATION_ATTEMPTS}"
+                )
             action = event.get("action")
             resource_type = event.get("resource_type")
             resource_id = _string(event.get("resource_id"), "operation.resource_id")

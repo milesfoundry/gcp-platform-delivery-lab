@@ -259,6 +259,52 @@ class RunIntentTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_manifest(candidate)
 
+    def test_operation_requires_exact_inventory_and_bounded_attempt(self):
+        candidate = intent()
+        resource_id = f"projects/{PROJECT}/global/networks/{RUN_ID}-network"
+        candidate["state"] = "provisioning"
+        candidate["resources"] = [
+            {
+                "type": "gcp.compute.network",
+                "id": resource_id,
+                "ownership_proof": "run_name",
+                "status": "expected",
+                "delete_attempts": 0,
+            }
+        ]
+        for control in candidate["controls"]:
+            control["status"] = "present"
+        event = {
+            "sequence": 1,
+            "kind": "intent",
+            "operation_id": operation_id(
+                RUN_ID, 1, "create", "gcp.compute.network", resource_id,
+                "c" * 64, "provisioning",
+            ),
+            "attempt": 1,
+            "action": "create",
+            "resource_type": "gcp.compute.network",
+            "resource_id": resource_id,
+            "request_sha256": "c" * 64,
+            "phase": "provisioning",
+            "at": "2026-10-18T12:01:00Z",
+        }
+        candidate["operations"] = [event]
+
+        missing_inventory = deepcopy(candidate)
+        missing_inventory["resources"] = []
+        with self.assertRaises(ContractError):
+            validate_manifest(missing_inventory)
+
+        over_attempted = deepcopy(candidate)
+        over_attempted["operations"][0]["attempt"] = 4
+        over_attempted["operations"][0]["operation_id"] = operation_id(
+            RUN_ID, 4, "create", "gcp.compute.network", resource_id,
+            "c" * 64, "provisioning",
+        )
+        with self.assertRaises(ContractError):
+            validate_manifest(over_attempted)
+
     def test_deadline_must_be_future_and_within_sixty_minutes(self):
         for value in ("2026-10-18T11:59:59Z", "2026-10-18T13:00:01Z"):
             candidate = intent()

@@ -351,6 +351,61 @@ class RunLedgerTests(unittest.TestCase):
                 request_sha256="d" * 64,
                 now=self.now + timedelta(seconds=9),
             )
+
+    def test_pending_create_can_reconcile_after_deadline_but_new_attempt_cannot(self):
+        self.intent["deadline_at"] = (
+            self.now + timedelta(seconds=10)
+        ).isoformat().replace("+00:00", "Z")
+        leased = self.lease_in_provisioning()
+        resource_id = (
+            f"projects/{self.intent['scope']['project_id']}"
+            f"/global/networks/{RUN_ID}-network"
+        )
+        request_sha = "c" * 64
+        pending = self.ledger.record_operation_intent(
+            RUN_ID,
+            expected_generation=leased.generation,
+            lease_owner="launcher",
+            attempt=1,
+            action="create",
+            resource_type="gcp.compute.network",
+            resource_id=resource_id,
+            request_sha256=request_sha,
+            now=self.now + timedelta(seconds=8),
+        )
+        replayed = self.ledger.record_operation_intent(
+            RUN_ID,
+            expected_generation=pending.generation,
+            lease_owner="launcher",
+            attempt=1,
+            action="create",
+            resource_type="gcp.compute.network",
+            resource_id=resource_id,
+            request_sha256=request_sha,
+            now=self.now + timedelta(seconds=11),
+        )
+        self.assertEqual(replayed, pending)
+        resolved = self.ledger.record_operation_result(
+            RUN_ID,
+            expected_generation=replayed.generation,
+            lease_owner="launcher",
+            operation_id_value=pending.manifest["operations"][0]["operation_id"],
+            outcome="reconciled_present",
+            response_sha256="d" * 64,
+            now=self.now + timedelta(seconds=12),
+        )
+        with self.assertRaises(ContractError):
+            self.ledger.record_operation_intent(
+                RUN_ID,
+                expected_generation=resolved.generation,
+                lease_owner="launcher",
+                attempt=2,
+                action="create",
+                resource_type="gcp.compute.network",
+                resource_id=resource_id,
+                request_sha256=request_sha,
+                now=self.now + timedelta(seconds=13),
+            )
         with self.assertRaises(ContractError):
             self.ledger.record_operation_intent(
                 RUN_ID,

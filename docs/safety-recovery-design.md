@@ -428,7 +428,16 @@ ambiguous submission. It never resubmits an existing intent. A create that is
 still absent remains unresolved because absence alone cannot prove the original
 request will not complete. Fake-adapter tests cover accepted asynchronous
 operations, commit-then-lost responses, unresolved absence and lease loss before
-submission. The controller has no real GCP adapter and does not execute cleanup.
+submission. The controller has no real GCP adapter. It also has no independent
+discovery/audit or deployed reaper. Managed-resource
+operations must match an exact predeclared type and ID in the run inventory;
+terminal create/delete results and inventory status updates share one ledger
+replacement. Its cleanup method switches teardown into `cleaning`, follows the
+reverse-dependency plan, resumes pending deletes and stops on unresolved or
+failed results; this remains an injected-adapter contract. New create intents
+are rejected at or after the fixed run deadline, while already-persisted intents
+remain reconcilable. Each provider target has at most three attempts; exhausted
+cleanup transitions to `incomplete` and preserves its recorded failure.
 The current Terraform roots use local backends at
 `bootstrap/terraform/.terraform/ephemeral-bootstrap.tfstate` and
 `infrastructure/lab/.terraform/ephemeral-lab.tfstate`; those are not durable and
@@ -570,11 +579,14 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    and durable phase-bound provider intents with deterministic IDs, progress
    receipts for accepted long-running operations, and terminal results. The
    credential-free `scripts/recovery_controller.py` submits or reconciles a
-   single operation through an injected adapter and fake tests cover response
-   loss, long-running polling and lease loss. Fake create-response-loss takeover
-   across a phase change is covered. Bucket isolation, backup administration,
-   versioning/retention, real provider reconciliation, adapters for the full
-   resource matrix and actual restore remain unqualified.
+   operation or performs reverse-dependency cleanup through an injected
+   adapter. Managed workload operations are bound to exact predeclared
+   inventory entries, and terminal results atomically update resource status.
+   Fake tests cover response loss, long-running polling and lease loss. Fake
+   create-response-loss takeover across a phase change is covered. Bucket
+   isolation, backup administration, versioning/retention, independent audit,
+   real provider reconciliation, adapters for the full resource matrix and
+   actual restore remain unqualified.
 2. `bootstrap/terraform/`: now owns only persistent bootstrap-project APIs,
    GitHub federation, cost-alert scaffolding and lifecycle alert policies; it
    no longer owns run APIs, node identity or the Config Sync Feature. Still
@@ -592,9 +604,12 @@ File-scoped implementation after CP-1A review; no cloud apply in CP-1B:
    The reaper never reads state.
 5. New recovery-controller modules plus `scripts/run_contract.py` adapters:
    connect the create-only ledger record and all per-run recovery controls before
-   project creation; finish exact-ID discovery and provider reads/deletes; bind
-   reaper writes to the ledger lease; separate project/billing, audit and control-reclamation
-   roles. The ledger fake covers response-loss retries and CAS conflicts; extend
+   project creation; finish provider discovery, independent absence audit and
+   provider reads/deletes; bind reaper writes to the ledger lease; separate
+   project/billing, audit and control-reclamation roles. Ordered cleanup now
+   resumes pending operations, but an append-only audit receipt, full external
+   inventory, billing/project audit and real provider adapter remain open. The
+   ledger fake covers response-loss retries and CAS conflicts; extend
    fake-provider drills for resource loss-after-create, idempotent cleanup and
    cross-run denial before any hosted credentials are added.
 6. `.github/workflows/validate.yaml` remains credential-free for CI and runs

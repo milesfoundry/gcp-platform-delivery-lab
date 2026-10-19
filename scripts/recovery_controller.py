@@ -13,7 +13,12 @@ import json
 import re
 from typing import Protocol
 
-from run_contract import DELETE_ORDER, ContractError, cleanup_plan
+from run_contract import (
+    DELETE_ORDER,
+    MAX_OPERATION_ATTEMPTS,
+    ContractError,
+    cleanup_plan,
+)
 from run_ledger import LedgerSnapshot, RunLedger
 
 
@@ -285,6 +290,35 @@ class RecoveryController:
                 ),
                 None,
             )
+            if pending is None and len(intents) >= MAX_OPERATION_ATTEMPTS:
+                latest_result = next(
+                    (
+                        event
+                        for event in reversed(current.manifest["operations"])
+                        if event["kind"] == "result"
+                        and event["operation_id"] == intents[-1]["operation_id"]
+                    ),
+                    None,
+                )
+                if current.manifest["state"] == "cleaning":
+                    candidate = json.loads(json.dumps(current.manifest))
+                    candidate["state"] = "incomplete"
+                    current = self.ledger.replace(
+                        run_id,
+                        expected_generation=current.generation,
+                        lease_owner=lease_owner,
+                        manifest=candidate,
+                        now=self.clock(),
+                    )
+                if latest_result is not None:
+                    results.append(
+                        OperationExecution(
+                            current,
+                            intents[-1]["operation_id"],
+                            latest_result["outcome"],
+                        )
+                    )
+                return current, results
             attempt = pending["attempt"] if pending is not None else len(intents) + 1
             execution = self.execute(
                 run_id,

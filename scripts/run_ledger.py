@@ -17,6 +17,7 @@ from run_contract import (
     ContractError,
     DELETE_ORDER,
     MAX_RUN_LIFETIME,
+    MAX_OPERATION_ATTEMPTS,
     RUN_ID,
     next_state,
     operation_id,
@@ -521,6 +522,10 @@ class RunLedger:
         self._validate_generation(expected_generation)
         if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
             raise ContractError("provider operation attempt must be a positive integer")
+        if attempt > MAX_OPERATION_ATTEMPTS:
+            raise ContractError(
+                f"provider operation attempts cannot exceed {MAX_OPERATION_ATTEMPTS}"
+            )
         if (
             not isinstance(request_sha256, str)
             or re.fullmatch(r"[0-9a-f]{64}", request_sha256) is None
@@ -547,6 +552,10 @@ class RunLedger:
             # callers must not interpret this replay as permission to call GCP.
             return current
 
+        if action == "create" and _parse_time(
+            current.manifest["deadline_at"], "deadline_at"
+        ) <= at:
+            raise ContractError("new provider create cannot start at or after the run deadline")
         phase = current.manifest["state"]
         op_id = operation_id(
             run_id, attempt, action, resource_type, resource_id, request_sha256, phase
