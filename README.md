@@ -10,6 +10,8 @@ Both use **Report Workshop**, a small deterministic asynchronous Go application.
 The local application is runnable. Terraform validates without credentials.
 The Config Sync source contains a namespace/delegation demonstration, not an
 application deployment. No GCP project has been provisioned by this repository.
+CI runs on GitHub-hosted runners; the estate's shared self-hosted group is
+private-only and not available to this public repository.
 
 ## Try the application locally
 
@@ -47,6 +49,30 @@ returns 409. Named fixture allowlisting prevents arbitrary files/URLs being proc
 demo's synthetic job history, run `docker compose down --volumes` from `workload/`.
 Do not use this command against another Compose project.
 
+## Checks
+
+Credential-free, from the repository root. Run these instead of any cloud
+command:
+
+```sh
+cd workload
+gofmt -l cmd internal            # must print nothing
+go vet ./...
+go test ./...
+cd ..
+terraform fmt -check -recursive infrastructure bootstrap
+terraform -chdir=infrastructure/lab init -input=false -lockfile=readonly
+terraform -chdir=infrastructure/lab validate
+terraform -chdir=infrastructure/lab test
+python3 scripts/check-ownership.py
+```
+
+`terraform validate` and `terraform test` prove the configuration parses and its
+contract holds; they are not permission to apply, and this repository has never
+been applied to a cloud project. The full gate list is in
+[the runbook](docs/runbook.md), and every command the `Validate` workflow runs is
+listed in [AGENTS.md](AGENTS.md).
+
 ## What is implemented?
 
 | Area | Current implementation | Not yet demonstrated |
@@ -73,6 +99,8 @@ Do not use this command against another Compose project.
 - [Trace correlation and CPU/heap investigation](docs/local-tracing-profiling.md)
 - [Controlled regression and original-image recovery](docs/local-regression-recovery.md)
 - [OpenAPI 3.1 contract](workload/internal/httpapi/openapi.json) (served at /openapi.json)
+- [Repository guidance for agents](AGENTS.md): edit locations, the exact check
+  commands and the paid-operation boundary
 
 Implementation records describe current behavior; the architecture profile distinguishes
 validated configuration from capabilities still requiring live qualification.
