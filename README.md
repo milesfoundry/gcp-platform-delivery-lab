@@ -47,6 +47,25 @@ returns 409. Named fixture allowlisting prevents arbitrary files/URLs being proc
 demo's synthetic job history, run `docker compose down --volumes` from `workload/`.
 Do not use this command against another Compose project.
 
+## PR5 run-contract source candidate
+
+[PR5 run-contract source slice](docs/pr5-run-contract-source-slice.md) is an unmerged
+source candidate, not available on `main`. It is a local, provider-free validation
+and dry-run path only. Source truth is
+[`scripts/run_contract_cli.py`](scripts/run_contract_cli.py), supported by
+`scripts/run_contract.py`; both use only the Python 3 standard library plus their
+sibling import, separate from full recovery dependencies. Use local JSON files:
+
+```sh
+python3 scripts/run_contract_cli.py intent /path/to/local-intent.json
+python3 scripts/run_contract_cli.py manifest /path/to/local-manifest.json
+python3 scripts/run_contract_cli.py cleanup /path/to/local-manifest.json
+python3 scripts/run_contract_cli.py controls /path/to/local-manifest.json
+```
+
+Accepted supplied evidence records 43 local donor tests passing once; that evidence
+is not on main and does not qualify full PR5, provider, or recovery behavior.
+
 ## What is implemented?
 
 | Area | Current implementation | Not yet demonstrated |

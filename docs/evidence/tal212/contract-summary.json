@@ -1,0 +1,132 @@
+{
+  "schema": "tal212.contract-summary/v1",
+  "tested_revision": "a852f53e690e60e2341246643a4c5950bf165630",
+  "evidence_commit": "17cb778ae965a0a6d4aad8b3d0bc8004dc0a6932",
+  "evidence_branch": "refactor/tal212-run-contract-slice",
+  "revision_note": "The evidence commit is not the tested revision. All 43 selected methods were executed against a852f53; commit 17cb778 only records the six shard files and their results.",
+  "donor": {
+    "sha": "d5e1e27857198a519a8e54acca710dc917b74d8c",
+    "base": "baf38cc7ada62b57735472f47f0618d35287da21",
+    "source_paths_byte_identical": true,
+    "paths": [
+      {
+        "path": "scripts/run_contract.py",
+        "git_blob": "e9acdcd591cb1d36f7b9a9c55ce346d4a62f143f",
+        "bytes": 73078
+      },
+      {
+        "path": "scripts/run_contract_cli.py",
+        "git_blob": "24d8d963570d6cdc5643d3e7e81941997cac2505",
+        "bytes": 2129
+      },
+      {
+        "path": "scripts/test_run_contract.py",
+        "git_blob": "699dbf13213381b2e10717673a80203623e8695c",
+        "bytes": 41865
+      },
+      {
+        "path": "scripts/test_run_contract_cli.py",
+        "git_blob": "652e85a59fea09c6e8e8d32ee180bf4b75df6f54",
+        "bytes": 5929
+      }
+    ]
+  },
+  "shards": [
+    {
+      "path": "docs/evidence/tal212/contract-shard-01.json",
+      "selected_methods": 8,
+      "expected_count": 8,
+      "actual_count": 8,
+      "exit_code": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "docs/evidence/tal212/contract-shard-02.json",
+      "selected_methods": 7,
+      "expected_count": 7,
+      "actual_count": 7,
+      "exit_code": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "docs/evidence/tal212/contract-shard-03.json",
+      "selected_methods": 7,
+      "expected_count": 7,
+      "actual_count": 7,
+      "exit_code": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "docs/evidence/tal212/contract-shard-04.json",
+      "selected_methods": 7,
+      "expected_count": 7,
+      "actual_count": 7,
+      "exit_code": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "docs/evidence/tal212/contract-shard-05.json",
+      "selected_methods": 7,
+      "expected_count": 7,
+      "actual_count": 7,
+      "exit_code": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "docs/evidence/tal212/contract-shard-06.json",
+      "selected_methods": 7,
+      "expected_count": 7,
+      "actual_count": 7,
+      "exit_code": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "totals": {
+    "shards": 6,
+    "selected_methods": 43,
+    "expected_count": 43,
+    "actual_count": 43,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "checks": {
+    "selected_methods_disjoint": true,
+    "selected_methods_unique_count": 43,
+    "all_exit_codes_zero": true,
+    "actual_equals_expected_for_each_shard": true,
+    "all_shards_report_tested_revision_a852f53": true,
+    "all_shards_report_donor_d5e1e27": true,
+    "all_shards_report_python_3_12_3": true,
+    "source_and_fixture_tree_unchanged_between_tested_revision_and_evidence_commit": true,
+    "paths_changed_between_tested_revision_and_evidence_commit": [
+      "docs/evidence/tal212/contract-shard-01.json",
+      "docs/evidence/tal212/contract-shard-02.json",
+      "docs/evidence/tal212/contract-shard-03.json",
+      "docs/evidence/tal212/contract-shard-04.json",
+      "docs/evidence/tal212/contract-shard-05.json",
+      "docs/evidence/tal212/contract-shard-06.json"
+    ]
+  },
+  "qualified_scope": "Local, provider-free behavior of scripts/run_contract.py and scripts/run_contract_cli.py only, as exercised once by the 43 selected existing donor methods at tested revision a852f53. Runtime was Python 3.12.3 with no network, credentials, provider calls, or dependency installation.",
+  "limits": [
+    "Does not establish IAM or provider correctness.",
+    "Does not establish cloud activation or integration.",
+    "Does not qualify the ledger, controller, identity, provider adapters, reaper, or full PR5.",
+    "Does not establish TAL221 admission or G11 closure.",
+    "Does not qualify a CI runner, served TLS, certificates, health, or issuance.",
+    "Evidence is limited to the six cited shards and their single executions; unknown data remains unknown."
+  ]
+}
