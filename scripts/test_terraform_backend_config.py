@@ -27,8 +27,7 @@ class TerraformBackendConfigTests(unittest.TestCase):
         self.assertEqual(
             render_backend_config(config),
             'bucket = "run-state-lab-20261018-a1b2"\n'
-            'prefix = "runs/lab-20261018-a1b2/terraform"\n'
-            'project = "recovery-lab-456"\n',
+            'prefix = "runs/lab-20261018-a1b2/terraform"\n',
         )
 
     def test_lab_rejects_wrong_state_object_and_invalid_manifest(self):
@@ -65,8 +64,7 @@ class TerraformBackendConfigTests(unittest.TestCase):
             })
             self.assertEqual(output.read_text(),
                              'bucket = "portfolio-bootstrap-state"\n'
-                             'prefix = "portfolio/bootstrap"\n'
-                             'project = "recovery-lab-456"\n')
+                             'prefix = "portfolio/bootstrap"\n')
             self.assertEqual(os.stat(output).st_mode & 0o777, 0o600)
             with self.assertRaises(BackendConfigError):
                 write_backend_config(output, {

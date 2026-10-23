@@ -48,9 +48,9 @@ def bootstrap_backend_config(bucket: str, project_id: str) -> dict[str, str]:
 
 
 def render_backend_config(config: dict[str, str]) -> str:
-    """Render only non-secret GCS backend fields as valid HCL."""
+    """Render only the supported non-secret GCS backend fields as valid HCL."""
     if set(config) != {"bucket", "prefix", "project"}:
-        raise BackendConfigError("backend config must contain only bucket and prefix")
+        raise BackendConfigError("backend config must contain exactly bucket, prefix, and project")
     bucket = config["bucket"]
     prefix = config["prefix"]
     project = config["project"]
@@ -65,7 +65,6 @@ def render_backend_config(config: dict[str, str]) -> str:
     return (
         f"bucket = {json.dumps(bucket)}\n"
         f"prefix = {json.dumps(prefix)}\n"
-        f"project = {json.dumps(project)}\n"
     )
 
 
