@@ -94,6 +94,39 @@ The qualified behavior is limited to `scripts/run_contract.py` and
 methods once. It is not evidence of integration, cloud activation, provider or
 IAM correctness, ledger/controller mutation or a cloud deployment.
 
+## Backend helper compatibility correction
+
+`scripts/terraform_backend_config.py` is an additional branch-only helper in this
+unmerged candidate, not one of the four donor files above. It retains validation
+of internal project metadata and emits GCS backend HCL containing only `bucket`
+and `prefix`. The unsupported donor `project` line is corrected intentionally,
+consistent with the
+[GCS backend reference](https://developer.hashicorp.com/terraform/language/backend/gcs)
+(cited, not fetched). Coverage is in the existing edited
+[test_terraform_backend_config.py](../scripts/test_terraform_backend_config.py)
+and the new
+[test_terraform_backend_cli.py](../scripts/test_terraform_backend_cli.py).
+
+The staged corrected candidate is `b834cba569737949a6348320090e16d25173d160`,
+distinct from original source `a852f53e690e60e2341246643a4c5950bf165630` and
+evidence commit `17cb778ae965a0a6d4aad8b3d0bc8004dc0a6932`. The four donor
+source/fixture blob identities above remain unchanged at `b834cba` for their
+named files; that binding does not extend to the newly corrected helper.
+
+- Edited worker tree: 5 tests passed (0 failures) in
+  `test_terraform_backend_config.py`, bound to
+  `terraform_backend_config.py` blob `9acb7bcbe87ef4727a339658bd50f97a12af67ab`
+  and test blob `1d560c630ba5ecf03b04225987a4f6e20288a636`.
+- Original CLI baseline: 4 cases, 1 expected failure for unsupported `project`
+  output; that failure demonstrates the old defect, not a corrected pass.
+- The integrated final four-case CLI batch passed once on `b834cba`, with no
+  errors, skips or duplicates. Results are retained in
+  `docs/evidence/tal212/backend-cli-01.json` through `backend-cli-04.json`.
+  These are local CLI/file checks, not actual Terraform backend initialization.
+
+No real Terraform init, bucket ownership, provider/IAM, or cloud behavior was
+exercised, and this does not close full PR5 or G11.
+
 ## Limits and remaining gaps
 
 This is a source candidate for review in smaller pieces and remains unmerged. It

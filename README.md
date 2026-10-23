@@ -66,6 +66,22 @@ python3 scripts/run_contract_cli.py controls /path/to/local-manifest.json
 Accepted supplied evidence records 43 local donor tests passing once; that evidence
 is not on main and does not qualify full PR5, provider, or recovery behavior.
 
+## Backend-config helper (review branch only)
+
+This local helper is review-branch-only: not on `main`, and not Terraform or provider
+qualification; see the [PR5 source slice](docs/pr5-run-contract-source-slice.md).
+The output parent must already exist and the output path must not exist.
+
+```sh
+python3 scripts/terraform_backend_config.py bootstrap --bucket example-terraform-state --project-id example-recovery-123 --output /path/to/new-backend.hcl
+python3 scripts/terraform_backend_config.py lab --intent /path/to/local-intent.json --output /path/to/new-backend.hcl
+```
+
+Paths are literal examples. The project argument validates internal scope metadata
+and is not emitted into HCL; output contains only `bucket`/`prefix`, is mode 0600,
+and refuses to overwrite. This does not check real bucket ownership or initialize
+Terraform.
+
 ## What is implemented?
 
 | Area | Current implementation | Not yet demonstrated |

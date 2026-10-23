@@ -1,0 +1,27 @@
+{
+  "schema": "tal212.backend-cli-case/v1",
+  "candidate_sha": "b834cba569737949a6348320090e16d25173d160",
+  "selected_method": "test_terraform_backend_cli.TerraformBackendCliTests.test_bootstrap_cli_writes_private_bucket_prefix_only_config",
+  "command": "python3 -m unittest test_terraform_backend_cli.TerraformBackendCliTests.test_bootstrap_cli_writes_private_bucket_prefix_only_config -v",
+  "exit_code": 0,
+  "actual_count": 1,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "elapsed_seconds": 0.117,
+  "python_version": "3.12.3",
+  "boundary": {
+    "scope": "One existing actual-CLI unittest method in scripts/, using only local main and synthetic task-owned tempfile/stdout contexts.",
+    "working_directory": "scripts/",
+    "interpreter": "/root/.local/state/tal209-handoffs/cert-final-pinned-20261023/locked-venv/bin/python3",
+    "network": "None",
+    "credentials": "None",
+    "terraform_executable": "None",
+    "provider_calls": "None"
+  },
+  "limits": [
+    "Covers only the named method on the stated candidate; no other CLI cases or prior edited-worker tests were rerun.",
+    "Local CLI and file behavior only; does not prove real Terraform GCS, provider, ownership, cloud activation, or infrastructure behavior.",
+    "Single execution record only; no aggregation or other-worker reads, and Codex owns milestone acceptance."
+  ]
+}

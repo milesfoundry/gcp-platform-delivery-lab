@@ -1,0 +1,28 @@
+{
+  "schema": "tal212.backend-cli-case/v1",
+  "candidate_sha": "b834cba569737949a6348320090e16d25173d160",
+  "selected_method": "test_terraform_backend_cli.TerraformBackendCliTests.test_bootstrap_cli_refuses_existing_output_without_changing_bytes",
+  "command": "PATH=/root/.local/state/tal209-handoffs/cert-final-pinned-20261023/locked-venv/bin:$PATH python3 -m unittest test_terraform_backend_cli.TerraformBackendCliTests.test_bootstrap_cli_refuses_existing_output_without_changing_bytes -v",
+  "exit_code": 0,
+  "actual_count": 1,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "elapsed_seconds": 0.159,
+  "python_version": "3.12.3",
+  "boundary": {
+    "scope": "One existing actual-CLI regression method for local CLI/file behavior only.",
+    "runtime": "Pinned read-only Python 3.12.3 interpreter; no installs or builds.",
+    "effects": "Only synthetic tempfile and stdout/stderr contexts owned by the existing unittest.",
+    "network": "None",
+    "credentials": "None",
+    "provider_calls": "None",
+    "terraform_executable": "None"
+  },
+  "limits": [
+    "Does not prove real Terraform GCS backend init, provider behavior, or cloud ownership.",
+    "Covers only the single named existing method, executed once with no fixes or retry.",
+    "GCP source remains branch-only; no full PR5, G11, or TAL221 claim.",
+    "No aggregation or other worker evidence was read."
+  ]
+}
