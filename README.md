@@ -1,5 +1,7 @@
 # GCP Platform Delivery Lab
 
+**Engineering foundation:** the shared [estate constitution](https://github.com/milesfoundry/iac-platform/blob/main/CONSTITUTION.md) applies here; local checks and provider limits are documented below. The constitution is an internal contributor reference and may require organization access.
+
 [![Validate](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/workflows/validate.yaml/badge.svg)](https://github.com/milesfoundry/gcp-platform-delivery-lab/actions/workflows/validate.yaml)
 
 A portfolio lab comparing Terraform-managed infrastructure and Config Sync
@@ -10,6 +12,16 @@ Both use **Report Workshop**, a small deterministic asynchronous Go application.
 The local application is runnable. Terraform validates without credentials.
 The Config Sync source contains a namespace/delegation demonstration, not an
 application deployment. No GCP project has been provisioned by this repository.
+Workflow YAML still declares GitHub-hosted runners; the estate's shared
+self-hosted group is private-only and not available to this public repository.
+The owner approved disabling `Validate` on 23 October 2026, and a Codex API
+readback confirmed `disabled_manually`: the `push`/`pull_request` declarations and
+hosted labels remain in YAML, but the disabled workflow is not running. TAL-221's
+CI-control decision is complete; disabled or skipped checks are not passes.
+Manual `qualify-ha` publication and qualification are paused pending the isolated
+self-hosted replacement and its successful push/main `Validate` evidence, so the
+existing exact-SHA gate is unchanged. The full provider lifecycle remains open and
+separate under TAL-194: no cloud apply, workload or teardown has been demonstrated.
 
 ## Try the application locally
 
@@ -47,12 +59,37 @@ returns 409. Named fixture allowlisting prevents arbitrary files/URLs being proc
 demo's synthetic job history, run `docker compose down --volumes` from `workload/`.
 Do not use this command against another Compose project.
 
+## Checks
+
+Credential-free, from the repository root. Run these instead of any cloud
+command:
+
+```sh
+cd workload
+gofmt -l cmd internal            # must print nothing
+go vet ./...
+go test -race -count=1 ./...
+cd ..
+terraform fmt -check -recursive infrastructure bootstrap
+terraform -chdir=infrastructure/lab init -input=false -lockfile=readonly
+terraform -chdir=infrastructure/lab validate
+terraform -chdir=infrastructure/lab test
+python3 scripts/check-ownership.py
+```
+
+`terraform validate` and `terraform test` prove the configuration parses and its
+contract holds; they are not permission to apply, and this repository has never
+been applied to a cloud project. The full gate list is in
+[the runbook](docs/runbook.md); [AGENTS.md](AGENTS.md) summarises representative
+credential-free checks, and the currently disabled `.github/workflows/validate.yaml`
+(as noted above) holds the full ordered set.
+
 ## What is implemented?
 
 | Area | Current implementation | Not yet demonstrated |
 | --- | --- | --- |
 | Workload | API, PostgreSQL outbox, fenced worker, Pub/Sub/GCS and SQS/S3 adapters, immutable report objects | Live cloud delivery, orphan sweep and object export |
-| Tests | Golden output, idempotency, fenced recovery, SDK protocol doubles, real PostgreSQL, native ARM smoke, hosted Kubernetes promotion and primary-worker loss | Live cloud queue/IAM contracts, physical cloud-zone/CSI failure |
+| Tests | Golden output, idempotency, fenced recovery, SDK protocol doubles, real PostgreSQL, native ARM smoke, historical hosted Kubernetes promotion and primary-worker-loss observations | Live cloud queue/IAM contracts, physical cloud-zone/CSI failure |
 | GCP | Terraform lab foundation plus private-state/federated-CI bootstrap | Actual plan/apply, identity qualification and cloud teardown |
 | GitOps | Root ownership, restricted delegation, migration gates; companion hosted Flux app promotion/rollback/drift/denial test | Config Sync/cloud runtime, binary/schema rollback, provider networking/identity and lifecycle |
 | Observability | Structured logs, metrics/Prometheus, optional OTel collector/Tempo and CPU/heap capture | Continuous profiles, log backend and investigation dashboards |
@@ -73,6 +110,8 @@ Do not use this command against another Compose project.
 - [Trace correlation and CPU/heap investigation](docs/local-tracing-profiling.md)
 - [Controlled regression and original-image recovery](docs/local-regression-recovery.md)
 - [OpenAPI 3.1 contract](workload/internal/httpapi/openapi.json) (served at /openapi.json)
+- [Repository guidance for agents](AGENTS.md): edit locations, the exact check
+  commands and the paid-operation boundary
 
 Implementation records describe current behavior; the architecture profile distinguishes
 validated configuration from capabilities still requiring live qualification.
