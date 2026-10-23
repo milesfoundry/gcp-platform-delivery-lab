@@ -51,18 +51,21 @@ The donor contains historical tests for this source:
 - [donor `scripts/test_run_contract_cli.py`](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/d5e1e27857198a519a8e54acca710dc917b74d8c/scripts/test_run_contract_cli.py)
   (blob `652e85a59fea09c6e8e8d32ee180bf4b75df6f54`)
 
-These are references only. The tests were not copied, added, or run, and this
-document claims no passing behavior.
+The two fixtures have now been copied byte-identically from that donor for
+qualification of this isolated candidate. Their source was not rewritten. No
+passing behavior is claimed until the named offline batch has been reviewed.
 
 ## Limits and remaining gaps
 
 This is a source candidate for review in smaller pieces. It does not fulfill the
 full run-contract/ledger slice or G11 closure. It excludes the ledger,
 controller, provider adapters, reaper, Terraform, workflows, requirements,
-identity, and fixture/test changes from PR5. It does not publish lab guidance
+identity and all other fixture/test changes from PR5. It does not publish lab guidance
 under TAL221 and grants no GCP, hosted-runner, or image authority.
 
-Remaining acceptance gaps include the full run-contract/ledger slice, test and
-integration evidence, G11 closure, and review of the other 68 donor paths.
+Remaining acceptance gaps include the full run-contract/ledger slice, reviewed
+offline qualification, integration evidence, G11 closure and the remaining donor
+paths. The original extraction changed two source paths; its two donor fixture
+paths are now also present in this review candidate.
 Qualification here is limited to byte equality, AST syntax and import inspection,
 relative-link checking, and diff review.
