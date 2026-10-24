@@ -1,160 +1,89 @@
-## Integration draft — 24 October
+# Provider-free source integration candidate
 
-Prepared on main `9a51ec80f76b1425d1316c13fc153f68bbcc0f50` from reviewed
-`85fd4c6061de67217df60d7ca885b8951b62a034`. All three provider-free modules
-(`run_contract.py`, `run_contract_cli.py`, `terraform_backend_config.py`) and
-retained evidence were transferred without behavior changes. The source blobs
-were compared with the donor, not re-tested. Existing fixtures remain on the
-preserved donor branch and are linked below; this packet adds no test files.
-The four backend CLI observations are retained in
-[evidence/tal212/backend-integration-review.json](evidence/tal212/backend-integration-review.json).
-This is a draft source integration, not main acceptance, CI, provider work,
-full PR5 integration or a G11 closure. The following is retained provenance.
+Status: unmerged PR6 source-integration candidate, head
+`e63d26ad8afbc9b987d2d72c0e9d4418d94100a7`, based on main
+`9a51ec80f76b1425d1316c13fc153f68bbcc0f50`. Codex retains merge and admission.
+The candidate's source scope is exactly three provider-free modules at
+blob-identical revisions from reviewed donor
+`85fd4c6061de67217df60d7ca885b8951b62a034`. Fixtures are not copied into this
+candidate, and no test suite, CI run or runtime check was executed for this
+head. Earlier evidence below is historical.
 
-# PR5 run-contract source slice
+## Source modules and provenance
 
-Status: partial, unmerged source extraction candidate. Locally qualified on
-2026-10-23 for provider-free two-module behavior only. This is not a merge,
-integration, deployment, provider, or closure record.
+| Module | Git blob | Bytes | Responsibility |
+| --- | --- | --- | --- |
+| [scripts/run_contract.py](../scripts/run_contract.py) | `e9acdcd591cb1d36f7b9a9c55ce346d4a62f143f` | 73,078 | Credential-free validation of run intents and manifests, monotonic lifecycle checks, deterministic dry-run plans |
+| [scripts/run_contract_cli.py](../scripts/run_contract_cli.py) | `24d8d963570d6cdc5643d3e7e81941997cac2505` | 2,129 | Local JSON-file CLI for intent, manifest and dry-run cleanup modes |
+| [scripts/terraform_backend_config.py](../scripts/terraform_backend_config.py) | `9acb7bcbe87ef4727a339658bd50f97a12af67ab` | 5,288 | Validates internal project metadata and emits GCS backend HCL containing only `bucket` and `prefix` |
 
-## Provenance
+All three module blobs are unchanged from `85fd4c6`. The CLI imports
+`run_contract` as a sibling, so the CLI and its module stay together in
+`scripts/`. Both run-contract modules use only the Python standard
+library plus that sibling import. The backend helper is the reviewed `85fd4c6`
+version; relative to original PR5 donor `d5e1e27`, it intentionally omits the
+unsupported `project` line, consistent with the
+[GCS backend reference](https://developer.hashicorp.com/terraform/language/backend/gcs)
+(cited, not fetched). None of these modules authenticates, calls a provider,
+persists a ledger or deletes resources.
 
-- Base: `origin/main` at `baf38cc7ada62b57735472f47f0618d35287da21`.
-- Donor: unmerged GCP PR5 draft head
-  `d5e1e27857198a519a8e54acca710dc917b74d8c`.
-- The donor is 62 commits ahead of the base and changes 71 paths; the donor is
-  not an ancestor of `origin/main`.
+## Donor fixtures
 
-The two files below were copied with `git show <donor>:<path>` and are
-byte-identical to the donor blobs. Neither path exists on the base, so this
-slice does not overwrite main content.
-
-| Path | Git blob | Bytes |
-| --- | --- | --- |
-| [scripts/run_contract.py](../scripts/run_contract.py) | `e9acdcd591cb1d36f7b9a9c55ce346d4a62f143f` | 73,078 |
-| [scripts/run_contract_cli.py](../scripts/run_contract_cli.py) | `24d8d963570d6cdc5643d3e7e81941997cac2505` | 2,129 |
-
-The original donor fixtures below were qualified in the preserved branch; they
-are not copied into this integration draft:
+These immutable fixtures remain on reviewed donor `85fd4c6`; they are not part
+of this integration candidate.
 
 | Fixture | Git blob | Bytes |
 | --- | --- | --- |
 | [scripts/test_run_contract.py](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/85fd4c6061de67217df60d7ca885b8951b62a034/scripts/test_run_contract.py) | `699dbf13213381b2e10717673a80203623e8695c` | 41,865 |
 | [scripts/test_run_contract_cli.py](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/85fd4c6061de67217df60d7ca885b8951b62a034/scripts/test_run_contract_cli.py) | `652e85a59fea09c6e8e8d32ee180bf4b75df6f54` | 5,929 |
+| [scripts/test_terraform_backend_config.py](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/85fd4c6061de67217df60d7ca885b8951b62a034/scripts/test_terraform_backend_config.py) | `1d560c630ba5ecf03b04225987a4f6e20288a636` | 3,683 |
+| [scripts/test_terraform_backend_cli.py](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/85fd4c6061de67217df60d7ca885b8951b62a034/scripts/test_terraform_backend_cli.py) | `9e148d04f69a6e0923c1a0aed654e3ba99a40f7c` | 4,008 |
 
-## Responsibilities and import boundary
+## Existing evidence
 
-`scripts/run_contract.py` performs credential-free validation of run intents
-and manifests, checks monotonic lifecycle transitions, and computes deterministic
-dry-run plans for workload and recovery-control cleanup. It does not
-authenticate, call provider APIs, persist a ledger, or delete resources.
+No evidence was regenerated. The links and hashes below retain the accepted
+historical records.
 
-`scripts/run_contract_cli.py` is a local JSON-file CLI for intent, manifest, and
-dry-run cleanup modes. It imports `run_contract` as a sibling module, so the two
-files must remain together in `scripts/`. Its output is a validation summary or
-a dry-run plan; it does not execute provider or workload operations.
+### Run-contract batch
 
-Both files use only Python standard-library imports plus the local sibling
-import in the CLI. The initial extraction verification used AST parsing only:
-no module import, execution, dependency installation, test run, or provider
-access at that stage.
+Six committed shards,
+[contract-shard-01.json](evidence/tal212/contract-shard-01.json) through
+[contract-shard-06.json](evidence/tal212/contract-shard-06.json), are aggregated
+in [contract-summary.json](evidence/tal212/contract-summary.json).
 
-## Main and donor status
+- Tested revision `a852f53e690e60e2341246643a4c5950bf165630`; evidence commit
+  `17cb778ae965a0a6d4aad8b3d0bc8004dc0a6932` on
+  `refactor/tal212-run-contract-slice`. The evidence commit only adds the shards.
+- 43 unique donor methods across six disjoint shards (8 + 7 + 7 + 7 + 7 + 7),
+  each shard exit 0 with expected count equal to actual and no failures, errors
+  or skips.
+- Scope is the local, provider-free behavior of `run_contract.py` and
+  `run_contract_cli.py` as exercised once by those methods at `a852f53`. Runtime
+  was Python 3.12.3 with no network, credentials, provider calls or installs.
 
-At the stated base, `origin/main` contains neither script. The donor remains
-unmerged. The source extraction adds the two scripts; this review candidate also
-contains the two donor fixtures and the local evidence described below. All
-other PR5 paths remain in the donor and are not represented here.
+### Backend helper observations
 
-## Historical donor test references
+[backend-integration-review.json](evidence/tal212/backend-integration-review.json)
+records five corrected-worker tests with zero failures, bound to
+`terraform_backend_config.py` blob `9acb7bc...` and test blob `1d560c6...`, plus
+an original four-case CLI baseline with one expected failure demonstrating the
+old `project` defect. Four later historical CLI case observations,
+[backend-cli-01.json](evidence/tal212/backend-cli-01.json) through
+[backend-cli-04.json](evidence/tal212/backend-cli-04.json), each recorded one
+pass on candidate `b834cba569737949a6348320090e16d25173d160`. That candidate is
+not this head. None of this proves real Terraform GCS initialization, provider
+or IAM behavior, bucket ownership or cloud activation.
 
-The donor contains historical tests for this source:
+## Excluded scope
 
-- [donor `scripts/test_run_contract.py`](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/d5e1e27857198a519a8e54acca710dc917b74d8c/scripts/test_run_contract.py)
-  (blob `699dbf13213381b2e10717673a80203623e8695c`)
-- [donor `scripts/test_run_contract_cli.py`](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/d5e1e27857198a519a8e54acca710dc917b74d8c/scripts/test_run_contract_cli.py)
-  (blob `652e85a59fea09c6e8e8d32ee180bf4b75df6f54`)
+Excluded from this candidate: provider adapters, ledger, controller, reaper,
+identity/IAM, Terraform and cloud runtime, workflows, requirements, and all
+other paths from PR5. It does not close full PR5, does not demonstrate TAL-194
+and does not close G11.
 
-The two fixtures have now been copied byte-identically from that donor for
-qualification of this isolated candidate. Their source was not rewritten. At the
-time of copying, no passing behavior was claimed pending review; the named
-offline batch has since been reviewed and is recorded below.
+## CI pause
 
-## Local qualification
-
-Six committed shards, [contract-shard-01.json](evidence/tal212/contract-shard-01.json)
-through [contract-shard-06.json](evidence/tal212/contract-shard-06.json), are
-aggregated in [contract-summary.json](evidence/tal212/contract-summary.json).
-The summary cites every shard and its counts.
-
-- Tested revision: `a852f53e690e60e2341246643a4c5950bf165630`.
-- Evidence commit: `17cb778ae965a0a6d4aad8b3d0bc8004dc0a6932` on
-  `refactor/tal212-run-contract-slice`. That commit is not the tested revision;
-  it only adds the six shard JSON files.
-- Selected methods: 43 unique methods across six disjoint shards, counted as
-  8 + 7 + 7 + 7 + 7 + 7.
-- Result per shard: exit code 0, actual count equals expected count, and no
-  failures, errors, or skips (recorded as either `0` or an empty list). Totals
-  are 43 expected, 43 actual, 0 failures, 0 errors, 0 skipped.
-- Runtime: Python 3.12.3 from the fixed locked virtual environment, executed
-  locally and provider-free with no network, credentials, provider calls, or
-  dependency installation.
-- Byte binding: the source and fixture blobs listed above are unchanged between
-  `a852f53` and `17cb778`, and remain byte-identical to donor `d5e1e27`. The
-  only paths changed between those two revisions are the six shard JSON files.
-
-The qualified behavior is limited to `scripts/run_contract.py` and
-`scripts/run_contract_cli.py` as exercised by the 43 named existing donor test
-methods once. It is not evidence of integration, cloud activation, provider or
-IAM correctness, ledger/controller mutation or a cloud deployment.
-
-## Backend helper compatibility correction
-
-`scripts/terraform_backend_config.py` is an additional branch-only helper in this
-unmerged candidate, not one of the four donor files above. It retains validation
-of internal project metadata and emits GCS backend HCL containing only `bucket`
-and `prefix`. The unsupported donor `project` line is corrected intentionally,
-consistent with the
-[GCS backend reference](https://developer.hashicorp.com/terraform/language/backend/gcs)
-(cited, not fetched). Coverage is in the existing edited
-[test_terraform_backend_config.py](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/85fd4c6061de67217df60d7ca885b8951b62a034/scripts/test_terraform_backend_config.py)
-and the new
-[test_terraform_backend_cli.py](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/85fd4c6061de67217df60d7ca885b8951b62a034/scripts/test_terraform_backend_cli.py).
-
-The staged corrected candidate is `b834cba569737949a6348320090e16d25173d160`,
-distinct from original source `a852f53e690e60e2341246643a4c5950bf165630` and
-evidence commit `17cb778ae965a0a6d4aad8b3d0bc8004dc0a6932`. The four donor
-source/fixture blob identities above remain unchanged at `b834cba` for their
-named files; that binding does not extend to the newly corrected helper.
-
-- Edited worker tree: 5 tests passed (0 failures) in
-  `test_terraform_backend_config.py`, bound to
-  `terraform_backend_config.py` blob `9acb7bcbe87ef4727a339658bd50f97a12af67ab`
-  and test blob `1d560c630ba5ecf03b04225987a4f6e20288a636`.
-- Original CLI baseline: 4 cases, 1 expected failure for unsupported `project`
-  output; that failure demonstrates the old defect, not a corrected pass.
-- The integrated final four-case CLI batch passed once on `b834cba`, with no
-  errors, skips or duplicates. Results are retained in
-  `docs/evidence/tal212/backend-cli-01.json` through `backend-cli-04.json`.
-  These are local CLI/file checks, not actual Terraform backend initialization.
-
-No real Terraform init, bucket ownership, provider/IAM, or cloud behavior was
-exercised, and this does not close full PR5 or G11.
-
-## Limits and remaining gaps
-
-This is a source candidate for review in smaller pieces and remains unmerged. It
-does not fulfill the full PR5 run-contract/ledger slice or G11 closure. It
-excludes the ledger, controller, provider adapters, reaper, Terraform, workflows,
-requirements, identity and all other fixture/test changes from PR5. It does not
-publish lab guidance under TAL221 and grants no GCP, hosted-runner, or image
-authority. Provider, ledger, and controller behavior remain unqualified.
-
-Remaining acceptance gaps include the full run-contract/ledger slice,
-integration evidence, G11 closure, TAL221 admission, provider/IAM validation,
-and the remaining donor paths. The original extraction changed two source paths;
-its two donor fixture paths are now also present in this review candidate.
-Earlier extraction checks were limited to byte equality, AST syntax and import
-inspection, relative-link checking, and diff review. The local qualification
-above adds only the 43 named offline methods; it does not close any of the gaps
-listed here.
+The legacy `Validate` workflow is owner-disabled under the completed TAL-221
+CI-control decision. Disabled or skipped checks are not passes; no CI ran for
+this head, and `qualify-ha` publication and qualification remain paused. This
+record grants no hosted-runner, GCP, provider, or image authority.
