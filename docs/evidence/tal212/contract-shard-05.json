@@ -1,0 +1,25 @@
+{
+  "schema": "tal212.gcp-contract-shard/v1",
+  "candidate_sha": "a852f53e690e60e2341246643a4c5950bf165630",
+  "donor_sha": "d5e1e27857198a519a8e54acca710dc917b74d8c",
+  "command": "python3 -m unittest test_run_contract.RunIntentTests.test_schema_five_binds_recovery_bucket_project_parent_and_audience test_run_contract.RunIntentTests.test_state_restore_proofs_validate_generation_and_crc32c_evidence test_run_contract.RunIntentTests.test_non_finite_boolean_and_negative_financial_values_fail test_run_contract.ManifestTests.test_manifest_accepts_run_scoped_resource_inventory test_run_contract.ManifestTests.test_resource_must_match_project_run_and_unique_ownership test_run_contract.ManifestTests.test_cleanup_is_reverse_dependency_order_and_stable test_run_contract.ManifestTests.test_project_retirement_operations_keep_the_same_verified_principal -v",
+  "selected_methods": [
+    "test_run_contract.RunIntentTests.test_schema_five_binds_recovery_bucket_project_parent_and_audience",
+    "test_run_contract.RunIntentTests.test_state_restore_proofs_validate_generation_and_crc32c_evidence",
+    "test_run_contract.RunIntentTests.test_non_finite_boolean_and_negative_financial_values_fail",
+    "test_run_contract.ManifestTests.test_manifest_accepts_run_scoped_resource_inventory",
+    "test_run_contract.ManifestTests.test_resource_must_match_project_run_and_unique_ownership",
+    "test_run_contract.ManifestTests.test_cleanup_is_reverse_dependency_order_and_stable",
+    "test_run_contract.ManifestTests.test_project_retirement_operations_keep_the_same_verified_principal"
+  ],
+  "expected_count": 7,
+  "actual_count": 7,
+  "exit_code": 0,
+  "elapsed_seconds": 0.118,
+  "failures": [],
+  "errors": [],
+  "skipped": [],
+  "python_version": "3.12.3",
+  "boundary": "Local provider-free behavior proof for the two named donor modules only, executed from scripts/ once with /root/.local/state/tal209-handoffs/cert-final-pinned-20261023/locked-venv/bin prefixed to PATH. This is not evidence of IAM/provider correctness, cloud activation, ledger/controller qualification, TAL221 admission or G11 closure.",
+  "limits": "Single run of the seven listed methods in the locked Python 3.12.3 runtime; no network, cloud, provider, credentials, dependency install, source repair, test changes, whole-suite discovery, retries, skips, mocks or aggregation across shards. Existing local-file/CLI fixtures only; source read-only."
+}

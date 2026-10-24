@@ -1,0 +1,28 @@
+{
+  "schema": "tal212.backend-cli-case/v1",
+  "candidate_sha": "b834cba569737949a6348320090e16d25173d160",
+  "selected_method": "test_terraform_backend_cli.TerraformBackendCliTests.test_bootstrap_cli_rejects_invalid_identity_before_output",
+  "command": "python3 -m unittest test_terraform_backend_cli.TerraformBackendCliTests.test_bootstrap_cli_rejects_invalid_identity_before_output -v",
+  "exit_code": 0,
+  "actual_count": 1,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "elapsed_seconds": 0.124,
+  "python_version": "3.12.3",
+  "boundary": {
+    "scope": "One existing actual-CLI regression method exercising terraform_backend_config.main with synthetic task-owned temporary output and stdout/stderr contexts.",
+    "execution_directory": "scripts",
+    "interpreter": "/root/.local/state/tal209-handoffs/cert-final-pinned-20261023/locked-venv/bin/python3",
+    "network": "None",
+    "credentials": "None",
+    "provider_calls": "None",
+    "terraform_executable": "None"
+  },
+  "limits": [
+    "Local CLI and filesystem behavior only; does not prove real Terraform GCS backend initialization, provider behavior, or cloud ownership.",
+    "Only the named method was executed, once, on the unmerged candidate; no other suites, repeated tests, or new tests were run.",
+    "Does not establish milestone acceptance, aggregation, G11 closure, TAL221 admission, or full PR acceptance.",
+    "Prior edited-worker test results were not rerun; they remain bound to blobs recorded in backend-integration-review.json."
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "schema": "tal212.gcp-contract-shard/v1",
+  "candidate_sha": "a852f53e690e60e2341246643a4c5950bf165630",
+  "donor_sha": "d5e1e27857198a519a8e54acca710dc917b74d8c",
+  "command": "python3 -m unittest test_run_contract.RunIntentTests.test_credit_balance_can_be_zero_with_verified_runway_review test_run_contract.RunIntentTests.test_run_id_maximum_fits_deterministic_service_account_names test_run_contract.RunIntentTests.test_deadline_must_be_future_and_within_sixty_minutes test_run_contract.RunIntentTests.test_recovery_controls_fail_closed_for_wrong_location_or_malformed_status test_run_contract.ManifestTests.test_prepared_requires_all_recovery_controls_verified test_run_contract.ManifestTests.test_storage_object_id_binds_run_project_bucket_name_and_generation test_run_contract.ManifestTests.test_state_transitions_follow_project_and_reclamation_phases -v",
+  "selected_methods": [
+    "test_run_contract.RunIntentTests.test_credit_balance_can_be_zero_with_verified_runway_review",
+    "test_run_contract.RunIntentTests.test_run_id_maximum_fits_deterministic_service_account_names",
+    "test_run_contract.RunIntentTests.test_deadline_must_be_future_and_within_sixty_minutes",
+    "test_run_contract.RunIntentTests.test_recovery_controls_fail_closed_for_wrong_location_or_malformed_status",
+    "test_run_contract.ManifestTests.test_prepared_requires_all_recovery_controls_verified",
+    "test_run_contract.ManifestTests.test_storage_object_id_binds_run_project_bucket_name_and_generation",
+    "test_run_contract.ManifestTests.test_state_transitions_follow_project_and_reclamation_phases"
+  ],
+  "expected_count": 7,
+  "actual_count": 7,
+  "exit_code": 0,
+  "elapsed_seconds": 0.125,
+  "failures": [],
+  "errors": [],
+  "skipped": 0,
+  "python_version": "3.12.3",
+  "boundary": "Local, provider-free behavior only: seven named existing donor unittest methods run once against candidate a852f53e690e60e2341246643a4c5950bf165630 with the fixed Python 3.12.3 runtime and existing synthetic inputs. This is not evidence of IAM or provider correctness, cloud activation, ledger or controller qualification, TAL221 admission, or G11 closure.",
+  "limits": "Only the seven listed methods were executed once from scripts/; no entire-suite discovery, other test methods, retries, skips, added mocks, weakened assertions, source or policy changes, dependency installation, provider/cloud/SSH/Docker/browser/network/credential access, sibling-worktree inspection, or all-shard aggregation. Codex owns acceptance and integration."
+}

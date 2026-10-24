@@ -1,0 +1,39 @@
+{
+  "schema": "tal212.gcp-contract-shard/v1",
+  "candidate_sha": "a852f53e690e60e2341246643a4c5950bf165630",
+  "donor_sha": "d5e1e27857198a519a8e54acca710dc917b74d8c",
+  "command": "python3 -m unittest test_run_contract.RetirementPrincipalLeaseTests.test_human_and_service_account_leases_bind_only_matching_principal_types test_run_contract.RunIntentTests.test_wrong_region_or_zone_is_rejected test_run_contract.RunIntentTests.test_unresolved_or_nondeterministic_provider_intent_fails_closed test_run_contract.RunIntentTests.test_alert_notification_channel_must_belong_to_exact_recovery_project test_run_contract.ManifestTests.test_persisted_manifest_cannot_switch_to_another_recovery_identity test_run_contract.ManifestTests.test_malformed_manifest_state_and_audit_result_fail_closed test_run_contract.ManifestTests.test_closed_requires_complete_independent_audit_and_empty_inventory test_run_contract_cli.RunContractCliTests.test_invalid_json_contract_is_rejected_without_operations -v",
+  "selected_methods": [
+    "test_run_contract.RetirementPrincipalLeaseTests.test_human_and_service_account_leases_bind_only_matching_principal_types",
+    "test_run_contract.RunIntentTests.test_wrong_region_or_zone_is_rejected",
+    "test_run_contract.RunIntentTests.test_unresolved_or_nondeterministic_provider_intent_fails_closed",
+    "test_run_contract.RunIntentTests.test_alert_notification_channel_must_belong_to_exact_recovery_project",
+    "test_run_contract.ManifestTests.test_persisted_manifest_cannot_switch_to_another_recovery_identity",
+    "test_run_contract.ManifestTests.test_malformed_manifest_state_and_audit_result_fail_closed",
+    "test_run_contract.ManifestTests.test_closed_requires_complete_independent_audit_and_empty_inventory",
+    "test_run_contract_cli.RunContractCliTests.test_invalid_json_contract_is_rejected_without_operations"
+  ],
+  "expected_count": 8,
+  "actual_count": 8,
+  "exit_code": 0,
+  "elapsed_seconds": 0.13,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "python_version": "3.12.3",
+  "boundary": {
+    "scope": "Local, provider-free contract behavior for run_contract.py and run_contract_cli.py only.",
+    "interpreter": "/root/.local/state/tal209-handoffs/cert-final-pinned-20261023/locked-venv/bin/python3",
+    "network": "None",
+    "credentials": "None",
+    "provider_calls": "None"
+  },
+  "limits": [
+    "Does not establish IAM or provider correctness.",
+    "Does not establish cloud activation.",
+    "Does not qualify ledger, controller, identity, provider, or reaper design.",
+    "Does not establish TAL221 admission.",
+    "Does not establish G11 closure.",
+    "Evidence covers only the eight listed original donor test methods, executed once."
+  ]
+}

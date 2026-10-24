@@ -1,0 +1,25 @@
+{
+  "schema": "tal212.gcp-contract-shard/v1",
+  "candidate_sha": "a852f53e690e60e2341246643a4c5950bf165630",
+  "donor_sha": "d5e1e27857198a519a8e54acca710dc917b74d8c",
+  "command": "PATH=/root/.local/state/tal209-handoffs/cert-final-pinned-20261023/locked-venv/bin:$PATH python3 -m unittest test_run_contract.RunIntentTests.test_approved_london_three_zone_intent_passes test_run_contract.RunIntentTests.test_invalid_run_or_project_identifier_is_rejected test_run_contract.RunIntentTests.test_operation_requires_exact_inventory_and_bounded_attempt test_run_contract.RunIntentTests.test_unknown_intent_fields_fail_closed test_run_contract.ManifestTests.test_reaper_identity_must_match_predeclared_control_account test_run_contract.ManifestTests.test_unknown_ownership_or_delete_attempt_count_fails test_run_contract.ManifestTests.test_bootstrap_or_ledger_resources_are_never_in_run_cleanup -v",
+  "selected_methods": [
+    "test_run_contract.RunIntentTests.test_approved_london_three_zone_intent_passes",
+    "test_run_contract.RunIntentTests.test_invalid_run_or_project_identifier_is_rejected",
+    "test_run_contract.RunIntentTests.test_operation_requires_exact_inventory_and_bounded_attempt",
+    "test_run_contract.RunIntentTests.test_unknown_intent_fields_fail_closed",
+    "test_run_contract.ManifestTests.test_reaper_identity_must_match_predeclared_control_account",
+    "test_run_contract.ManifestTests.test_unknown_ownership_or_delete_attempt_count_fails",
+    "test_run_contract.ManifestTests.test_bootstrap_or_ledger_resources_are_never_in_run_cleanup"
+  ],
+  "expected_count": 7,
+  "actual_count": 7,
+  "exit_code": 0,
+  "elapsed_seconds": 0.164,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "python_version": "3.12.3",
+  "boundary": "Local provider-free execution of seven named existing donor unittest methods from scripts/test_run_contract.py against the named candidate; no source, policy, fixture, or test changes. Evidence covers only local/provider-free behavior of run_contract.py and run_contract_cli.py adjacent contract tests.",
+  "limits": "Does not establish IAM or provider correctness, cloud activation, ledger/controller qualification, TAL221 admission, or G11 closure. No provider, cloud, network, SSH, Docker, or credential access was performed. Other shards were not run or aggregated; acceptance and integration remain Codex-owned."
+}

@@ -1,0 +1,21 @@
+{
+  "schema": "tal212.backend-cli-case/v1",
+  "candidate_sha": "b834cba569737949a6348320090e16d25173d160",
+  "selected_method": "test_terraform_backend_cli.TerraformBackendCliTests.test_lab_cli_rejects_unreadable_intent_before_output",
+  "command": "PATH=\"/root/.local/state/tal209-handoffs/cert-final-pinned-20261023/locked-venv/bin:$PATH\" python3 -m unittest test_terraform_backend_cli.TerraformBackendCliTests.test_lab_cli_rejects_unreadable_intent_before_output -v",
+  "exit_code": 0,
+  "actual_count": 1,
+  "failures": [],
+  "errors": [],
+  "skipped": [],
+  "elapsed_seconds": 0.107,
+  "python_version": "3.12.3",
+  "boundary": "Local CLI/file behavior only: the actual terraform_backend_config.main entrypoint exercised by the named existing unittest with synthetic task-owned tempfile/stdout contexts. This does not establish real Terraform GCS backend init, provider or credential behavior, cloud ownership, or production correctness.",
+  "limits": [
+    "Single execution of the one named existing CLI regression method from scripts/, using the specified read-only PATH prefix; no retry, suite discovery, other suites, new tests, or automatic follow-up.",
+    "No installs, builds, provider credentials, network, SSH, host access, Terraform init/plan/apply/state, cloud access, commit, push, merge, deploy, or dispatch.",
+    "Source and tests remained read-only; only this evidence file was written by the worker.",
+    "The prior edited-worker 5 tests remain blob-bound in backend-integration-review.json and were not rerun.",
+    "No aggregation or other-worker evidence reads; Codex owns milestone acceptance."
+  ]
+}

@@ -100,6 +100,7 @@ credential-free checks, and the currently disabled `.github/workflows/validate.y
 - [Ephemeral London HA architecture, instance comparison and cost gates](docs/architecture-cost.md)
 
 - [Current architecture and decisions](docs/implementation.md)
+- [Reviewed provider-free run-contract source integration candidate (unmerged)](docs/pr5-run-contract-source-slice.md)
 - [Application replicas, crash recovery and dormant Kubernetes profile](docs/application-replicas.md)
 - [Image publishing and hosted database/node-failure qualification](docs/image-and-ha-qualification.md)
 - [Cloud queue/object adapters and crash contracts](docs/cloud-adapters.md)
