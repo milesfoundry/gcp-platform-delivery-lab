@@ -1,0 +1,30 @@
+{
+  "schema": "tal212.gcp-contract-shard/v1",
+  "candidate_sha": "a852f53e690e60e2341246643a4c5950bf165630",
+  "donor_sha": "d5e1e27857198a519a8e54acca710dc917b74d8c",
+  "command": "python3 -m unittest test_run_contract.RunIntentTests.test_billing_account_name_must_be_canonical test_run_contract.RunIntentTests.test_state_backup_references_are_distinct_exact_and_generation_safe test_run_contract.RunIntentTests.test_timestamps_require_timezone_and_stale_credit_is_rejected test_run_contract.RunIntentTests.test_new_intent_cannot_predeclare_resources_or_skip_control_bootstrap test_run_contract.ManifestTests.test_unknown_persistent_or_project_wide_resource_is_rejected test_run_contract.ManifestTests.test_discovery_receipt_sequence_rejects_boolean_integer test_run_contract.ManifestTests.test_project_delete_must_follow_billing_unlink_result -v",
+  "selected_methods": [
+    "test_run_contract.RunIntentTests.test_billing_account_name_must_be_canonical",
+    "test_run_contract.RunIntentTests.test_state_backup_references_are_distinct_exact_and_generation_safe",
+    "test_run_contract.RunIntentTests.test_timestamps_require_timezone_and_stale_credit_is_rejected",
+    "test_run_contract.RunIntentTests.test_new_intent_cannot_predeclare_resources_or_skip_control_bootstrap",
+    "test_run_contract.ManifestTests.test_unknown_persistent_or_project_wide_resource_is_rejected",
+    "test_run_contract.ManifestTests.test_discovery_receipt_sequence_rejects_boolean_integer",
+    "test_run_contract.ManifestTests.test_project_delete_must_follow_billing_unlink_result"
+  ],
+  "expected_count": 7,
+  "actual_count": 7,
+  "exit_code": 0,
+  "elapsed_seconds": 0.178,
+  "failures": [],
+  "errors": [],
+  "skipped": [],
+  "python_version": "3.12.3",
+  "boundary": "Local, provider-free behavior of the two extracted donor modules only: run_contract.py and run_contract_cli.py as exercised by existing donor tests using synthetic data. This evidence does not establish IAM or provider correctness, cloud activation, ledger or controller qualification, TAL221 admission, or G11 closure.",
+  "limits": [
+    "Single execution of the seven named original donor test methods; no suite discovery, retries, skips, added mocks, or assertion changes.",
+    "Fixed existing read-only runtime only, with no cloud packages, provider credentials, network, or external access.",
+    "Source and policy are read-only; only this evidence file was written by the worker.",
+    "Results are not aggregated across other shards and do not imply acceptance or integration, which remain Codex-owned."
+  ]
+}

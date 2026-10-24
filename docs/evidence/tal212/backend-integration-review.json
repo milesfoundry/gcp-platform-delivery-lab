@@ -1,0 +1,24 @@
+{
+  "schema": "tal212.backend-integration-review/v1",
+  "preintegration_source": "93e98b787e322bad6e7cf7e29a28bdb1d8882e75",
+  "corrected_worker_tests": {
+    "tests": 5,
+    "failures": 0,
+    "scope": "edited worker tree; blob bindings below, not unmodified base commit"
+  },
+  "cli_original_regression": {
+    "tests": 4,
+    "failures": 1,
+    "expected_failure": "unsupported project output; demonstrates old defect"
+  },
+  "corrected_blob_bindings": {
+    "scripts/terraform_backend_config.py": "9acb7bcbe87ef4727a339658bd50f97a12af67ab",
+    "scripts/test_terraform_backend_config.py": "1d560c630ba5ecf03b04225987a4f6e20288a636"
+  },
+  "source_review": "AST bodies of all functions except renderer unchanged; project metadata validation retained.",
+  "limits": [
+    "Integrated CLI cases not yet executed on corrected candidate.",
+    "No real Terraform backend init, provider calls or cloud ownership verification.",
+    "Candidate remains branch-only."
+  ]
+}

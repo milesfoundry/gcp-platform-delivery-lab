@@ -1,0 +1,25 @@
+{
+  "schema": "tal212.gcp-contract-shard/v1",
+  "candidate_sha": "a852f53e690e60e2341246643a4c5950bf165630",
+  "donor_sha": "d5e1e27857198a519a8e54acca710dc917b74d8c",
+  "command": "PATH=/root/.local/state/tal209-handoffs/cert-final-pinned-20261023/locked-venv/bin:$PATH python3 -m unittest test_run_contract.RunIntentTests.test_enabled_api_service_policy_must_be_sorted_unique_and_valid test_run_contract.RunIntentTests.test_provider_operation_intent_and_result_are_exact_and_deterministic test_run_contract.RunIntentTests.test_no_alert_or_independent_recovery_means_no_activation test_run_contract.ManifestTests.test_reaper_identity_is_recovery_project_scoped test_run_contract.ManifestTests.test_regional_resources_must_match_the_approved_london_region test_run_contract.ManifestTests.test_cleanup_requires_teardown_and_never_includes_already_deleted test_run_contract_cli.RunContractCliTests.test_cleanup_mode_emits_deterministic_dry_run_ids -v",
+  "selected_methods": [
+    "test_run_contract.RunIntentTests.test_enabled_api_service_policy_must_be_sorted_unique_and_valid",
+    "test_run_contract.RunIntentTests.test_provider_operation_intent_and_result_are_exact_and_deterministic",
+    "test_run_contract.RunIntentTests.test_no_alert_or_independent_recovery_means_no_activation",
+    "test_run_contract.ManifestTests.test_reaper_identity_is_recovery_project_scoped",
+    "test_run_contract.ManifestTests.test_regional_resources_must_match_the_approved_london_region",
+    "test_run_contract.ManifestTests.test_cleanup_requires_teardown_and_never_includes_already_deleted",
+    "test_run_contract_cli.RunContractCliTests.test_cleanup_mode_emits_deterministic_dry_run_ids"
+  ],
+  "expected_count": 7,
+  "actual_count": 7,
+  "exit_code": 0,
+  "elapsed_seconds": 0.122,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "python_version": "3.12.3",
+  "boundary": "Local, provider-free behavior qualification of the seven named existing donor methods only, using the fixed locked Python runtime and existing synthetic/temp-file inputs.",
+  "limits": "Not evidence of IAM or provider correctness, cloud activation, ledger/controller qualification, TAL221 admission, or G11 closure; no provider, network, credentials, deployment, or other test methods were used."
+}
