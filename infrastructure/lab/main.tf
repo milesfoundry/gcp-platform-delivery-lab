@@ -1,26 +1,58 @@
 locals {
-  name = "portfolio-delivery"
-  apis = toset([
-    "compute.googleapis.com", "container.googleapis.com",
-    "gkehub.googleapis.com", "anthosconfigmanagement.googleapis.com",
+  name = var.run_id
+  lab_apis = toset([
+    "compute.googleapis.com",
+    "container.googleapis.com",
+    "gkehub.googleapis.com",
+    "anthosconfigmanagement.googleapis.com",
     "gkeconnect.googleapis.com",
-    "storage.googleapis.com", "pubsub.googleapis.com",
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "serviceusage.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
+    "storage.googleapis.com",
+    "pubsub.googleapis.com",
   ])
 }
 
 resource "google_project_service" "lab" {
-  for_each           = local.apis
+  for_each           = local.lab_apis
+  project            = var.project_id
   service            = each.value
-  disable_on_destroy = true
+  disable_on_destroy = false
+}
+
+resource "google_service_account" "lab_nodes" {
+  project      = var.project_id
+  account_id   = "${var.run_id}-nodes"
+  display_name = "${var.run_id} GKE nodes; no application cloud permissions"
+  depends_on   = [google_project_service.lab]
+}
+
+resource "google_project_iam_member" "lab_node_service" {
+  project = var.project_id
+  role    = "roles/container.defaultNodeServiceAccount"
+  member  = "serviceAccount:${google_service_account.lab_nodes.email}"
+}
+
+resource "google_gke_hub_feature" "config_sync" {
+  project    = var.project_id
+  name       = "configmanagement"
+  location   = "global"
+  depends_on = [google_project_service.lab]
 }
 
 resource "google_compute_network" "lab" {
+  project                 = var.project_id
   name                    = local.name
   auto_create_subnetworks = false
   depends_on              = [google_project_service.lab]
 }
 
 resource "google_compute_subnetwork" "lab" {
+  project                  = var.project_id
   name                     = local.name
   network                  = google_compute_network.lab.id
   ip_cidr_range            = "10.40.0.0/24"
@@ -37,6 +69,7 @@ resource "google_compute_subnetwork" "lab" {
 
 # Private nodes need explicit egress for public Git/image sources. NAT is billable.
 resource "google_compute_router" "lab" {
+  project = var.project_id
   name    = local.name
   network = google_compute_network.lab.id
 }
@@ -51,18 +84,8 @@ resource "google_compute_router_nat" "lab" {
   }
 }
 
-resource "google_service_account" "nodes" {
-  account_id   = "portfolio-gke-nodes"
-  display_name = "Portfolio GKE nodes; no application cloud permissions"
-  depends_on   = [google_project_service.lab]
-}
-resource "google_project_iam_member" "node_service" {
-  project = var.project_id
-  role    = "roles/container.defaultNodeServiceAccount"
-  member  = "serviceAccount:${google_service_account.nodes.email}"
-}
-
 resource "google_container_cluster" "lab" {
+  project                  = var.project_id
   name                     = local.name
   location                 = var.region
   node_locations           = sort(tolist(var.zones))
@@ -75,6 +98,9 @@ resource "google_container_cluster" "lab" {
   release_channel { channel = "REGULAR" }
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
+  }
+  resource_labels = {
+    lab_run_id = var.run_id
   }
   ip_allocation_policy {
     cluster_secondary_range_name  = "pods"
@@ -95,10 +121,11 @@ resource "google_container_cluster" "lab" {
     enabled  = true
     provider = "CALICO"
   }
-  depends_on = [google_compute_router_nat.lab, google_project_iam_member.node_service]
+  depends_on = [google_compute_router_nat.lab]
 }
 
 resource "google_container_node_pool" "lab" {
+  project        = var.project_id
   name           = "lab"
   cluster        = google_container_cluster.lab.id
   location       = var.region
@@ -116,7 +143,7 @@ resource "google_container_node_pool" "lab" {
     machine_type    = "e2-medium"
     disk_size_gb    = 30
     disk_type       = "pd-standard"
-    service_account = google_service_account.nodes.email
+    service_account = google_service_account.lab_nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
     workload_metadata_config { mode = "GKE_METADATA" }
     shielded_instance_config {
@@ -124,9 +151,11 @@ resource "google_container_node_pool" "lab" {
       enable_integrity_monitoring = true
     }
   }
+  depends_on = [google_project_iam_member.lab_node_service]
 }
 
 resource "google_gke_hub_membership" "lab" {
+  project       = var.project_id
   membership_id = local.name
   location      = "global"
   endpoint {
@@ -135,12 +164,8 @@ resource "google_gke_hub_membership" "lab" {
     }
   }
 }
-resource "google_gke_hub_feature" "config_sync" {
-  name       = "configmanagement"
-  location   = "global"
-  depends_on = [google_project_service.lab]
-}
 resource "google_gke_hub_feature_membership" "config_sync" {
+  project    = var.project_id
   location   = "global"
   feature    = google_gke_hub_feature.config_sync.name
   membership = google_gke_hub_membership.lab.membership_id

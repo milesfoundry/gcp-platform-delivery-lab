@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class StateContractTests(unittest.TestCase):
-    def test_bootstrap_has_no_remote_state_bucket_or_writer(self):
+    def test_bootstrap_does_not_create_its_own_state_bucket_or_writer(self):
         main = (ROOT / "bootstrap/terraform/main.tf").read_text()
         variables = (ROOT / "bootstrap/terraform/variables.tf").read_text()
         outputs = (ROOT / "bootstrap/terraform/outputs.tf").read_text()
@@ -16,17 +16,18 @@ class StateContractTests(unittest.TestCase):
         self.assertNotIn('"google_storage_bucket_iam_member" "state_writer', main)
         self.assertNotIn('variable "state_bucket_name"', variables)
         self.assertNotIn("state_bucket", outputs)
-        self.assertIn('backend           = "local"', outputs)
-        self.assertIn("artifact_upload   = false", outputs)
+        self.assertIn('backend         = "gcs"', outputs)
+        self.assertIn('backup_status   = "unqualified"', outputs)
+        self.assertIn("artifact_upload = false", outputs)
 
     def test_both_roots_store_state_under_ignored_terraform_directory(self):
         lab = (ROOT / "infrastructure/lab/backend.tf").read_text()
         bootstrap = (ROOT / "bootstrap/terraform/backend.tf").read_text()
         ignore = (ROOT / ".gitignore").read_text()
-        self.assertIn('backend "local"', lab)
-        self.assertIn('.terraform/ephemeral-lab.tfstate', lab)
-        self.assertIn('backend "local"', bootstrap)
-        self.assertIn('.terraform/ephemeral-bootstrap.tfstate', bootstrap)
+        self.assertIn('backend "gcs" {}', lab)
+        self.assertIn('backend "gcs" {}', bootstrap)
+        self.assertNotIn("credentials", lab)
+        self.assertNotIn("credentials", bootstrap)
         self.assertIn(".terraform/", ignore)
         self.assertIn("*.tfstate", ignore)
 

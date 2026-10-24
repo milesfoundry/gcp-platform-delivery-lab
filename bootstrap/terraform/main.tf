@@ -8,6 +8,10 @@ locals {
   ])
 }
 
+data "google_project" "bootstrap" {
+  project_id = var.project_id
+}
+
 resource "google_project_service" "bootstrap" {
   for_each = toset([
     "iam.googleapis.com", "iamcredentials.googleapis.com",
@@ -16,7 +20,7 @@ resource "google_project_service" "bootstrap" {
     "logging.googleapis.com",
   ])
   service            = each.value
-  disable_on_destroy = true
+  disable_on_destroy = false
 }
 
 resource "google_service_account" "ci" {
@@ -86,7 +90,7 @@ resource "google_billing_budget" "cost_alerts" {
   display_name    = "Ephemeral portfolio lab gross cost"
 
   budget_filter {
-    projects               = ["projects/${var.project_id}"]
+    projects               = ["projects/${data.google_project.bootstrap.number}"]
     credit_types_treatment = "EXCLUDE_ALL_CREDITS"
   }
 

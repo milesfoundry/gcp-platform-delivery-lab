@@ -1,6 +1,14 @@
 variable "project_id" {
-  description = "Dedicated existing, billing-enabled lab project. No shared production project."
+  description = "Dedicated disposable project for this run. No shared recovery resources."
   type        = string
+}
+variable "run_id" {
+  description = "Unique lowercase run ID used in names and cloud resource labels."
+  type        = string
+  validation {
+    condition     = can(regex("^lab-[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$", var.run_id))
+    error_message = "Use a unique lab-prefixed run ID of at most 24 lowercase letters, digits, or hyphens."
+  }
 }
 variable "region" {
   description = "London region for the regional HA lab."

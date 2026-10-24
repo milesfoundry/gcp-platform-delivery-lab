@@ -118,17 +118,40 @@ jobs:
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
         with:
           terraform_version: 1.16.4
+      - run: python3 -m pip install -r scripts/requirements-recovery.txt
       - run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
-      - run: terraform fmt -check -recursive infrastructure bootstrap
-      - run: terraform -chdir=bootstrap/terraform init -input=false -lockfile=readonly
+      - run: terraform fmt -check -recursive infrastructure bootstrap recovery
+      - run: terraform -chdir=bootstrap/terraform init -backend=false -input=false -lockfile=readonly
       - run: terraform -chdir=bootstrap/terraform validate
       - run: terraform -chdir=bootstrap/terraform test
-      - run: terraform -chdir=infrastructure/lab init -input=false -lockfile=readonly
+      - run: terraform -chdir=infrastructure/lab init -backend=false -input=false -lockfile=readonly
       - run: terraform -chdir=infrastructure/lab validate
       - run: terraform -chdir=infrastructure/lab test
+      - run: terraform -chdir=recovery/terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=recovery/terraform validate
+      - run: terraform -chdir=recovery/terraform test
       - name: Render disjoint Config Sync owners
         run: |
           python3 -m pip install PyYAML==6.0.2
           kubectl kustomize gitops/platform > /tmp/platform.yaml
           kubectl kustomize gitops/apps/report > /tmp/app.yaml
           python3 scripts/check-ownership.py
+  reaper-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build the pinned runtime image
+        run: docker build --pull -f recovery/reaper/Dockerfile -t portfolio-reaper:validate .
+      - name: Check non-root startup and fail-closed configuration
+        run: |
+          docker run --rm --entrypoint python portfolio-reaper:validate -c 'import os; assert os.getuid() == 65532'
+          docker run --rm --entrypoint python portfolio-reaper:validate -c 'from gcp_reaper_entrypoint import main, ReaperEntrypointError
+          try:
+              main({})
+          except ReaperEntrypointError:
+              pass
+          else:
+              raise AssertionError("missing configuration must fail")'

@@ -1,5 +1,5 @@
 variable "project_id" {
-  description = "Approved dedicated existing lab project."
+  description = "Persistent bootstrap/recovery project; disposable run projects are managed separately."
   type        = string
 }
 variable "region" {

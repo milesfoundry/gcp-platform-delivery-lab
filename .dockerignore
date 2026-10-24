@@ -1,0 +1,14 @@
+**
+!recovery
+!recovery/reaper
+!recovery/reaper/Dockerfile
+!recovery/reaper/requirements.lock
+!scripts
+!scripts/gcp_cleanup_adapter.py
+!scripts/gcp_project_lifecycle_adapter.py
+!scripts/gcp_reaper_entrypoint.py
+!scripts/gcp_token_identity.py
+!scripts/project_reclaimer_runtime.py
+!scripts/recovery_controller.py
+!scripts/run_contract.py
+!scripts/run_ledger.py

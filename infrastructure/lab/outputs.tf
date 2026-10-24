@@ -4,3 +4,81 @@ output "cluster_name" {
 output "membership" {
   value = google_gke_hub_membership.lab.id
 }
+output "run_inventory" {
+  description = "Run-owned provider resource identities for the durable manifest."
+  value = {
+    schema     = "portfolio.gcp-run-inventory.v1"
+    run_id     = var.run_id
+    project_id = var.project_id
+    region     = var.region
+    api_services = [
+      for service in google_project_service.lab : {
+        type            = "gcp.project.service"
+        id              = service.id
+        ownership_proof = "run_project"
+        owner           = "project_reclamation"
+      }
+    ]
+    resources = [
+      {
+        type            = "gcp.compute.network"
+        id              = google_compute_network.lab.id
+        ownership_proof = "run_name"
+      },
+      {
+        type            = "gcp.compute.subnetwork"
+        id              = google_compute_subnetwork.lab.id
+        ownership_proof = "run_name"
+      },
+      {
+        type            = "gcp.compute.router"
+        id              = google_compute_router.lab.id
+        ownership_proof = "run_name"
+      },
+      {
+        type            = "gcp.compute.router_nat"
+        id              = google_compute_router_nat.lab.id
+        ownership_proof = "run_name"
+      },
+      {
+        type            = "gcp.gke.cluster"
+        id              = google_container_cluster.lab.id
+        ownership_proof = "run_label"
+      },
+      {
+        type            = "gcp.gke.node_pool"
+        id              = google_container_node_pool.lab.id
+        ownership_proof = "run_name"
+      },
+      {
+        type            = "gcp.gkehub.membership"
+        id              = google_gke_hub_membership.lab.id
+        ownership_proof = "run_name"
+      },
+      {
+        type            = "gcp.gkehub.feature_membership"
+        id              = google_gke_hub_feature_membership.config_sync.id
+        ownership_proof = "run_name"
+      },
+      {
+        type            = "gcp.gkehub.feature"
+        id              = google_gke_hub_feature.config_sync.id
+        ownership_proof = "run_project"
+      },
+    ]
+    project_resources = [
+      {
+        type            = "gcp.iam.service_account"
+        id              = google_service_account.lab_nodes.name
+        ownership_proof = "run_name"
+        owner           = "project_reclamation"
+      },
+      {
+        type            = "gcp.iam.project_binding"
+        id              = google_project_iam_member.lab_node_service.id
+        ownership_proof = "run_project"
+        owner           = "project_reclamation"
+      },
+    ]
+  }
+}
