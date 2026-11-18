@@ -64,7 +64,8 @@ supplied, standard library only):
 - Independent review found that the donor fixtures did not detect removal of
   the source revision, image digest and finance credit-evidence digest guards.
   The separate `test_run_contract_immutable_source.py` covers those negative
-  cases; the resulting suite passed 70 tests locally on 18 November 2026.
+  cases in 12 additional test methods; the resulting suite passed 70 tests
+  locally on 18 November 2026 (6 existing + 52 restored + 12 new).
 
 `Validate` would select these files if it ran: its `terraform` job already runs
 `python3 -m unittest discover -s scripts -p 'test_*.py' -v`. But the workflow is
