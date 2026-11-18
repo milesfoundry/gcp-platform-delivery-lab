@@ -1,13 +1,17 @@
-# Provider-free source integration candidate
+# Provider-free source integration
 
-Status: unmerged PR6 source-integration candidate, head
-`e63d26ad8afbc9b987d2d72c0e9d4418d94100a7`, based on main
-`9a51ec80f76b1425d1316c13fc153f68bbcc0f50`. Codex retains merge and admission.
-The candidate's source scope is exactly three provider-free modules at
-blob-identical revisions from reviewed donor
-`85fd4c6061de67217df60d7ca885b8951b62a034`. Fixtures are not copied into this
-candidate, and no test suite, CI run or runtime check was executed for this
-head. Earlier evidence below is historical.
+Status: merged on main as `6b88e2b90fc5b6d1e674712bfd6831eaf74442d0`
+("TAL-209: integrate reviewed provider-free contract source (#6)"), whose parent
+is `9a51ec80f76b1425d1316c13fc153f68bbcc0f50`. The source scope is exactly three
+provider-free modules at blob-identical revisions from reviewed donor
+`85fd4c6061de67217df60d7ca885b8951b62a034`. The donor's four test fixtures are
+restored by the companion integration patch, so the tree that was actually
+tested is that patch applied to `6b88e2b` — the **patched tree**, not `6b88e2b`
+alone — and the offline `scripts` suite passed in it locally on 17 November
+2026. No hosted CI run, live provider call or cloud runtime check was executed
+for that tree. `origin/main` was re-read read-only on 17 November 2026 and still
+pointed at `6b88e2b`, so the target was current at that time; that check is not
+standing currency. Earlier evidence below is historical.
 
 ## Source modules and provenance
 
@@ -29,20 +33,56 @@ persists a ledger or deletes resources.
 
 ## Donor fixtures
 
-These immutable fixtures remain on reviewed donor `85fd4c6`; they are not part
-of this integration candidate.
+The four fixtures are restored verbatim from donor `85fd4c6`; each restored blob
+is byte-identical to the donor blob and the restore patch adds no other file.
+Only these fixtures were taken from the donor branch: its `AGENTS.md` deletion
+and its `README.md`/document rewrites are not carried over.
 
-| Fixture | Git blob | Bytes |
-| --- | --- | --- |
-| [scripts/test_run_contract.py](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/85fd4c6061de67217df60d7ca885b8951b62a034/scripts/test_run_contract.py) | `699dbf13213381b2e10717673a80203623e8695c` | 41,865 |
-| [scripts/test_run_contract_cli.py](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/85fd4c6061de67217df60d7ca885b8951b62a034/scripts/test_run_contract_cli.py) | `652e85a59fea09c6e8e8d32ee180bf4b75df6f54` | 5,929 |
-| [scripts/test_terraform_backend_config.py](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/85fd4c6061de67217df60d7ca885b8951b62a034/scripts/test_terraform_backend_config.py) | `1d560c630ba5ecf03b04225987a4f6e20288a636` | 3,683 |
-| [scripts/test_terraform_backend_cli.py](https://github.com/milesfoundry/gcp-platform-delivery-lab/blob/85fd4c6061de67217df60d7ca885b8951b62a034/scripts/test_terraform_backend_cli.py) | `9e148d04f69a6e0923c1a0aed654e3ba99a40f7c` | 4,008 |
+| Fixture | Git blob | Bytes | Methods |
+| --- | --- | --- | --- |
+| [scripts/test_run_contract.py](../scripts/test_run_contract.py) | `699dbf13213381b2e10717673a80203623e8695c` | 41,865 | 41 |
+| [scripts/test_run_contract_cli.py](../scripts/test_run_contract_cli.py) | `652e85a59fea09c6e8e8d32ee180bf4b75df6f54` | 5,929 | 2 |
+| [scripts/test_terraform_backend_config.py](../scripts/test_terraform_backend_config.py) | `1d560c630ba5ecf03b04225987a4f6e20288a636` | 3,683 | 5 |
+| [scripts/test_terraform_backend_cli.py](../scripts/test_terraform_backend_cli.py) | `9e148d04f69a6e0923c1a0aed654e3ba99a40f7c` | 4,008 | 4 |
+
+Local offline re-execution, 17 November 2026, in a disposable clone of
+`6b88e2b` with both patches applied (the patched tree; Python 3.12.3, unshared
+network namespace exposing only loopback, only `PATH`/`HOME`/`PYTHONPATH`
+supplied, standard library only):
+
+- `python3 -m unittest discover -s scripts -p 'test_*.py' -v` ran 58 tests and
+  exited 0 in the patched tree: the 6 pre-existing
+  `test_notify_lifecycle`/`test_state_contract` methods plus the 52 restored
+  methods (41 + 2 + 5 + 4).
+- The restored modules also pass individually: 41 + 2 + 4 + 5 methods.
+- Temporary-copy mutations of compared behaviour show the restored suite is not
+  vacuous. Each mutation failed exactly the restored methods that assert that
+  behaviour, with the rest of the module still passing: run-ID pattern →
+  `test_run_id_maximum_fits_deterministic_service_account_names`; backend
+  `project` line → `test_lab_uses_manifest_bucket_and_default_workspace_object_path`
+  and `test_backend_config_file_is_private_and_never_overwritten` (two methods,
+  because both compare rendered backend text); cleanup ordering →
+  `test_cleanup_is_reverse_dependency_order_and_stable`; CLI rejection exit code
+  → `test_invalid_json_contract_is_rejected_without_operations`.
+- The evidence collector fails closed. A failing or extra test, a restored blob
+  that differs from the donor, a mutation the suite misses, a reachable network
+  inside the test namespace, or leftover stale wording in this document each
+  make it exit non-zero, and a deliberate sabotage harness exercises those
+  paths.
+
+`Validate` would select these files if it ran: its `terraform` job already runs
+`python3 -m unittest discover -s scripts -p 'test_*.py' -v`. But the workflow is
+owner-disabled — GitHub reports `disabled_manually` under the completed TAL-221
+CI-control decision, recorded in the repository README — so restoring the files
+produces no hosted run, and a disabled or skipped check is not a pass. This
+patch changes no workflow.
 
 ## Existing evidence
 
-No evidence was regenerated. The links and hashes below retain the accepted
-historical records.
+The links and hashes below retain the accepted historical records; they were not
+regenerated and no historical JSON was edited. The 17 November local run above
+re-executed the same restored methods in the patched tree and is a separate
+observation.
 
 ### Run-contract batch
 
@@ -70,13 +110,13 @@ an original four-case CLI baseline with one expected failure demonstrating the
 old `project` defect. Four later historical CLI case observations,
 [backend-cli-01.json](evidence/tal212/backend-cli-01.json) through
 [backend-cli-04.json](evidence/tal212/backend-cli-04.json), each recorded one
-pass on candidate `b834cba569737949a6348320090e16d25173d160`. That candidate is
-not this head. None of this proves real Terraform GCS initialization, provider
+pass on candidate `b834cba569737949a6348320090e16d25173d160`, distinct from the
+merged source revision. None of this proves real Terraform GCS initialization, provider
 or IAM behavior, bucket ownership or cloud activation.
 
 ## Excluded scope
 
-Excluded from this candidate: provider adapters, ledger, controller, reaper,
+Excluded from this source slice: provider adapters, ledger, controller, reaper,
 identity/IAM, Terraform and cloud runtime, workflows, requirements, and all
 other paths from PR5. It does not close full PR5, does not demonstrate TAL-194
 and does not close G11.
@@ -84,6 +124,8 @@ and does not close G11.
 ## CI pause
 
 The legacy `Validate` workflow is owner-disabled under the completed TAL-221
-CI-control decision. Disabled or skipped checks are not passes; no CI ran for
-this head, and `qualify-ha` publication and qualification remain paused. This
-record grants no hosted-runner, GCP, provider, or image authority.
+CI-control decision (`disabled_manually`; the `push`/`pull_request` declarations
+and hosted labels remain in YAML, but the workflow does not run). Disabled or
+skipped checks are not passes; no hosted CI was run for the restored fixtures, and `qualify-ha`
+publication and qualification remain paused. This record grants no
+hosted-runner, GCP, provider, or image authority.
