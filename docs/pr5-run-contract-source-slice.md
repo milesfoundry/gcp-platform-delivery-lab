@@ -61,9 +61,10 @@ supplied, standard library only):
   cleanup-order and CLI rejection checks. These are illustrative rather than
   exhaustive. The scratch collector and sabotage harness are not included in
   this repository and their recorded results are not hosted CI artifacts.
-- Independent review found that removal of the source revision, source image
-  digest and finance credit-evidence digest guards was not caught by these
-  fixtures. Those negative cases remain follow-up coverage work.
+- Independent review found that the donor fixtures did not detect removal of
+  the source revision, image digest and finance credit-evidence digest guards.
+  The separate `test_run_contract_immutable_source.py` covers those negative
+  cases; the resulting suite passed 70 tests locally on 18 November 2026.
 
 `Validate` would select these files if it ran: its `terraform` job already runs
 `python3 -m unittest discover -s scripts -p 'test_*.py' -v`. But the workflow is
