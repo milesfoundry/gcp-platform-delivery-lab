@@ -8,8 +8,9 @@ provider-free modules at blob-identical revisions from reviewed donor
 restored by the companion integration patch, so the tree that was actually
 tested is that patch applied to `6b88e2b` — the **patched tree**, not `6b88e2b`
 alone — and the offline `scripts` suite passed in it locally on 17 November
-2026. PR #7 subsequently changed documentation wording only; the tested module
-and fixture blobs are unchanged. No hosted CI run, live provider call or cloud runtime check was executed
+2026. Commit `1d98fbb` subsequently changed documentation wording only; the
+tested module and fixture blobs are unchanged. No hosted CI run, live provider
+call or cloud runtime check was executed
 for that tree. `origin/main` was re-read read-only on 17 November 2026 and still
 pointed at `6b88e2b`, so the target was current at that time; that check is not
 standing currency. Earlier evidence below is historical.
@@ -46,7 +47,8 @@ donor tree; its older guidance and documentation were not carried over.
 | [scripts/test_terraform_backend_cli.py](../scripts/test_terraform_backend_cli.py) | `9e148d04f69a6e0923c1a0aed654e3ba99a40f7c` | 4,008 | 4 |
 
 Local offline re-execution, 17 November 2026, in a disposable clone of
-`6b88e2b` with both patches applied (the patched tree; Python 3.12.3, unshared
+`6b88e2b` with the fixture restore and documentation patches applied (Python
+3.12.3, unshared
 network namespace exposing only loopback, only `PATH`/`HOME`/`PYTHONPATH`
 supplied, standard library only):
 
@@ -55,21 +57,13 @@ supplied, standard library only):
   `test_notify_lifecycle`/`test_state_contract` methods plus the 52 restored
   methods (41 + 2 + 5 + 4).
 - The restored modules also pass individually: 41 + 2 + 4 + 5 methods.
-- Temporary-copy mutations of compared behaviour show the restored suite is not
-  vacuous. Each mutation failed exactly the restored methods that assert that
-  behaviour, with the rest of the module still passing: run-ID pattern →
-  `test_run_id_maximum_fits_deterministic_service_account_names`; backend
-  `project` line → `test_lab_uses_manifest_bucket_and_default_workspace_object_path`
-  and `test_backend_config_file_is_private_and_never_overwritten` (two methods,
-  because both compare rendered backend text); cleanup ordering →
-  `test_cleanup_is_reverse_dependency_order_and_stable`; CLI rejection exit code
-  → `test_invalid_json_contract_is_rejected_without_operations`.
-- The scratch evidence collector (not included in this repository) was exercised
-  with synthetic failures. A failing or extra test, a restored blob
-  that differs from the donor, a mutation the suite misses, a reachable network
-  inside the test namespace, or leftover stale wording in this document each
-  make it exit non-zero, and a deliberate sabotage harness exercises those
-  paths. Its recorded results are not a repository-hosted CI artifact.
+- Four scripted temporary-copy mutations exercised selected run-ID, backend,
+  cleanup-order and CLI rejection checks. These are illustrative rather than
+  exhaustive. The scratch collector and sabotage harness are not included in
+  this repository and their recorded results are not hosted CI artifacts.
+- Independent review found that removal of the source revision, source image
+  digest and finance credit-evidence digest guards was not caught by these
+  fixtures. Those negative cases remain follow-up coverage work.
 
 `Validate` would select these files if it ran: its `terraform` job already runs
 `python3 -m unittest discover -s scripts -p 'test_*.py' -v`. But the workflow is
