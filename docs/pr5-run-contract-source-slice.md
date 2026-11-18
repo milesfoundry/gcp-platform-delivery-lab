@@ -8,7 +8,8 @@ provider-free modules at blob-identical revisions from reviewed donor
 restored by the companion integration patch, so the tree that was actually
 tested is that patch applied to `6b88e2b` — the **patched tree**, not `6b88e2b`
 alone — and the offline `scripts` suite passed in it locally on 17 November
-2026. No hosted CI run, live provider call or cloud runtime check was executed
+2026. PR #7 subsequently changed documentation wording only; the tested module
+and fixture blobs are unchanged. No hosted CI run, live provider call or cloud runtime check was executed
 for that tree. `origin/main` was re-read read-only on 17 November 2026 and still
 pointed at `6b88e2b`, so the target was current at that time; that check is not
 standing currency. Earlier evidence below is historical.
@@ -34,9 +35,8 @@ persists a ledger or deletes resources.
 ## Donor fixtures
 
 The four fixtures are restored verbatim from donor `85fd4c6`; each restored blob
-is byte-identical to the donor blob and the restore patch adds no other file.
-Only these fixtures were taken from the donor branch: its `AGENTS.md` deletion
-and its `README.md`/document rewrites are not carried over.
+is byte-identical to the donor blob. Only these fixtures were taken from the
+donor tree; its older guidance and documentation were not carried over.
 
 | Fixture | Git blob | Bytes | Methods |
 | --- | --- | --- | --- |
@@ -64,11 +64,12 @@ supplied, standard library only):
   because both compare rendered backend text); cleanup ordering →
   `test_cleanup_is_reverse_dependency_order_and_stable`; CLI rejection exit code
   → `test_invalid_json_contract_is_rejected_without_operations`.
-- The evidence collector fails closed. A failing or extra test, a restored blob
+- The scratch evidence collector (not included in this repository) was exercised
+  with synthetic failures. A failing or extra test, a restored blob
   that differs from the donor, a mutation the suite misses, a reachable network
   inside the test namespace, or leftover stale wording in this document each
   make it exit non-zero, and a deliberate sabotage harness exercises those
-  paths.
+  paths. Its recorded results are not a repository-hosted CI artifact.
 
 `Validate` would select these files if it ran: its `terraform` job already runs
 `python3 -m unittest discover -s scripts -p 'test_*.py' -v`. But the workflow is
@@ -111,8 +112,8 @@ old `project` defect. Four later historical CLI case observations,
 [backend-cli-01.json](evidence/tal212/backend-cli-01.json) through
 [backend-cli-04.json](evidence/tal212/backend-cli-04.json), each recorded one
 pass on candidate `b834cba569737949a6348320090e16d25173d160`, distinct from the
-merged source revision. None of this proves real Terraform GCS initialization, provider
-or IAM behavior, bucket ownership or cloud activation.
+merged source revision. None of this proves real Terraform GCS initialization,
+provider or IAM behavior, bucket ownership or cloud activation.
 
 ## Excluded scope
 
@@ -126,6 +127,6 @@ and does not close G11.
 The legacy `Validate` workflow is owner-disabled under the completed TAL-221
 CI-control decision (`disabled_manually`; the `push`/`pull_request` declarations
 and hosted labels remain in YAML, but the workflow does not run). Disabled or
-skipped checks are not passes; no hosted CI was run for the restored fixtures, and `qualify-ha`
-publication and qualification remain paused. This record grants no
+skipped checks are not passes; no hosted CI was run for the restored fixtures,
+and `qualify-ha` publication and qualification remain paused. This record grants no
 hosted-runner, GCP, provider, or image authority.
